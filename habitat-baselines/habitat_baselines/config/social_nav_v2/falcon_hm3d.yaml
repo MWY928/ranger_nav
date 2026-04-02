@@ -40,16 +40,16 @@ habitat:
         lin_speed: 0.0 
         ang_speed: 0.0
       agent_0_discrete_move_forward:
-        lin_speed: 25.0
+        lin_speed: 6.0
         ang_speed: 0.0
         allow_dyn_slide: True
       agent_0_discrete_turn_left:
         lin_speed: 0.0
-        ang_speed: 10.0
+        ang_speed: 6.0
         allow_dyn_slide: True
       agent_0_discrete_turn_right:
         lin_speed: 0.0
-        ang_speed: -10.0
+        ang_speed: -6.0
         allow_dyn_slide: True
       agent_1_oracle_nav_randcoord_action_obstacle:
         type: OracleNavRandCoordAction_Obstacle 
