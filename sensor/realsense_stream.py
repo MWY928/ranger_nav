@@ -7,10 +7,21 @@ import pyrealsense2 as rs
 
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Header
-from cv_bridge import CvBridge
+
+
 
 
 class RealsenseRosNode(object):
+    def numpy_to_image_msg(self, arr, encoding, frame_id):
+        msg = Image()
+        msg.header = self._make_header(frame_id)
+        msg.height = arr.shape[0]
+        msg.width = arr.shape[1]
+        msg.encoding = encoding
+        msg.is_bigendian = False
+        msg.step = arr.strides[0]
+        msg.data = arr.tobytes()
+        return msg
     def __init__(self):
         rospy.init_node("realsense_rgbd_node", anonymous=False)
 
@@ -18,6 +29,9 @@ class RealsenseRosNode(object):
         # ROS params
         # -----------------------------
         self.serial = rospy.get_param("~serial", None)
+        if self.serial == "":
+            self.serial = None
+	    
         self.prefer_fps = int(rospy.get_param("~fps", 30))
         self.enable_align_to_color = bool(rospy.get_param("~align_to_color", True))
 
@@ -30,7 +44,7 @@ class RealsenseRosNode(object):
         self.depth_frame_id = rospy.get_param("~depth_frame_id", "camera_color_optical_frame")  
         # 因为这里发布的是“对齐到彩色图”的深度，所以默认也用 color optical frame
 
-        self.bridge = CvBridge()
+
 
         self.pipeline = None
         self.config = None
@@ -214,8 +228,7 @@ class RealsenseRosNode(object):
         color_bgr = np.asanyarray(color_frame.get_data())
         color_rgb = color_bgr[:, :, ::-1].copy()
 
-        color_msg = self.bridge.cv2_to_imgmsg(color_rgb, encoding="rgb8")
-        color_msg.header = self._make_header(self.color_frame_id)
+        color_msg = self.numpy_to_image_msg(color_rgb, "rgb8", self.color_frame_id)
 
         # -----------------------------
         # Depth image
@@ -223,8 +236,7 @@ class RealsenseRosNode(object):
         # 这样最兼容 ROS 生态
         # -----------------------------
         depth_raw = np.asanyarray(depth_frame.get_data()).copy()  # uint16
-        depth_msg = self.bridge.cv2_to_imgmsg(depth_raw, encoding="16UC1")
-        depth_msg.header = self._make_header(self.depth_frame_id)
+        depth_msg = self.numpy_to_image_msg(depth_raw, "16UC1", self.depth_frame_id)
 
         # -----------------------------
         # CameraInfo

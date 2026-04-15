@@ -32,7 +32,7 @@ measurements:
     use_geo_distance: true
     allow_distance: 2.0
     collide_scene_penalty: -0.005
-    collide_human_penalty: -0.015
+    collide_human_penalty: -0.017
     close_to_human_penalty: -0.003
     trajectory_cover_penalty: -0.0005
     cover_future_dis_thre: 0.05 

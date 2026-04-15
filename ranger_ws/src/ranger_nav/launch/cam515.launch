@@ -1,0 +1,15 @@
+<launch>
+  <node pkg="ranger_nav"
+        type="realsense_stream.py"
+        name="realsense_rgbd_node"
+        output="screen">
+    <param name="fps" value="30" />
+    <param name="align_to_color" value="true" />
+    <param name="color_topic" value="/camera/color/image_raw" />
+    <param name="depth_topic" value="/camera/aligned_depth_to_color/image_raw" />
+    <param name="color_info_topic" value="/camera/color/camera_info" />
+    <param name="depth_info_topic" value="/camera/aligned_depth_to_color/camera_info" />
+    <param name="color_frame_id" value="camera_color_optical_frame" />
+    <param name="depth_frame_id" value="camera_color_optical_frame" />
+  </node>
+</launch>

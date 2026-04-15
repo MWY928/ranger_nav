@@ -597,15 +597,16 @@ class SPL(Measure):
         self._agent_episode_distance += self._euclidean_distance(
             current_position, self._previous_position
         )
-
         self._previous_position = current_position
 
-        self._metric = ep_success * (
-            self._start_end_episode_distance
-            / max(
+        max_episode_distance = max(
                 self._start_end_episode_distance, self._agent_episode_distance
             )
-        )
+        if max_episode_distance == 0:
+            self._metric = ep_success
+        else:
+
+            self._metric = ep_success * (self._start_end_episode_distance / max_episode_distance )
 
 
 @registry.register_measure

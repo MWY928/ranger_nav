@@ -1,0 +1,12 @@
+<launch>
+  <rosparam command="load" file="$(find ranger_nav)/config/tags.yaml"/>
+
+  <node pkg="apriltag_ros"
+        type="apriltag_ros_continuous_node"
+        name="apriltag_detector"
+        output="screen"
+        clear_params="true">
+    <remap from="image_rect" to="/camera/color/image_raw" />
+    <remap from="camera_info" to="/camera/color/camera_info" />
+  </node>
+</launch>
