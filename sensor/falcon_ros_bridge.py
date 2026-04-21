@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Falcon ROS bridge.
+
+Data flow (runtime):
+1) Subscribe RGB/Depth + goal signal (either polar topic or AprilTag detections).
+2) Build policy observation in Falcon/PointNav format.
+3) Run policy inference (Discrete(4)).
+4) Map discrete action to Twist and publish to cmd_vel.
+
+Safety behavior:
+- If goal input is missing/too old, publish stop.
+- If callback fails, publish stop.
+- If input stream stalls (watchdog timeout), publish stop.
+"""
 
 import argparse
 from typing import Dict
@@ -50,6 +64,8 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
 
 
 class FalconRosBridge(object):
+    """Bridge ROS sensor streams to Falcon policy and publish cmd_vel."""
+
     def __init__(self, args):
         rospy.init_node("falcon_ros_bridge", anonymous=False)
         self.bridge = CvBridge()
@@ -104,6 +120,9 @@ class FalconRosBridge(object):
         self.detections_sub = None
         self.sync = None
 
+        # Two goal source modes:
+        # - detections: convert AprilTag detections to (r, theta)
+        # - topic: read (r, theta) directly from PointStamped
         if self.polar_source == "detections":
             self.detections_sub = message_filters.Subscriber(
                 args.detections_topic, AprilTagDetectionArray
@@ -173,6 +192,7 @@ class FalconRosBridge(object):
         backbone: str,
         rnn_type: str,
     ):
+        # Build observation/action spaces that match the training setup.
         spaces = {
             self.goal_key: Box(
                 low=np.finfo(np.float32).min,
@@ -223,6 +243,8 @@ class FalconRosBridge(object):
         return policy
 
     def _depth_msg_to_norm_depth(self, depth_msg: Image) -> np.ndarray:
+        # Accept either millimeter uint16 depth or meter float32 depth, then
+        # normalize to [0, 1] and resize to policy resolution.
         if depth_msg.encoding == "16UC1":
             depth_u16 = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="16UC1")
             depth_m = depth_u16.astype(np.float32) * 0.001
@@ -238,6 +260,7 @@ class FalconRosBridge(object):
         return depth_norm
 
     def _color_msg_to_rgb(self, color_msg: Image) -> np.ndarray:
+        # Policy expects RGB uint8 with fixed spatial size.
         if color_msg.encoding == "rgb8":
             rgb = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         else:
@@ -247,8 +270,7 @@ class FalconRosBridge(object):
         return rgb.astype(np.uint8)
 
     def _build_obs(self, depth_msg: Image, polar_msg: PointStamped, color_msg: Image = None) -> Dict[str, np.ndarray]:
-        # polar msg convention from sensor/polar_distance.py:
-        # x=r, y=theta
+        # Polar convention from sensor/polar_distance.py: x=r, y=theta.
         r = np.float32(polar_msg.point.x)
         theta = np.float32(polar_msg.point.y)
 
@@ -261,6 +283,8 @@ class FalconRosBridge(object):
         return obs
 
     def _infer_action(self, obs: Dict[str, np.ndarray]) -> int:
+        # Recurrent policy inference:
+        # hidden_states/prev_actions/not_done_masks are carried across timesteps.
         batch = batch_obs([obs], device=self.device)
         with torch.no_grad():
             action_data = self.actor_critic.act(
@@ -276,6 +300,7 @@ class FalconRosBridge(object):
         return int(action_data.env_actions[0][0].item())
 
     def _publish_cmd(self, action_id: int):
+        # Action id -> (linear x, angular z).
         lin, ang = self.action_to_cmd.get(action_id, (0.0, 0.0))
         tw = Twist()
         tw.linear.x = lin
@@ -291,6 +316,7 @@ class FalconRosBridge(object):
         self.polar_buffer.append(polar_msg)
 
     def _pick_polar_for_stamp(self, target_stamp: rospy.Time):
+        # Pick the temporally closest polar message to current image timestamp.
         if len(self.polar_buffer) == 0:
             return None
 
@@ -315,6 +341,8 @@ class FalconRosBridge(object):
         return best
 
     def _detections_to_polar(self, msg: AprilTagDetectionArray):
+        # Convert selected AprilTag detection pose to pointgoal-like polar target.
+        # pose x/z are interpreted in camera frame.
         if msg is None or len(msg.detections) == 0:
             return None
 
@@ -351,12 +379,14 @@ class FalconRosBridge(object):
         return out
 
     def _emit_heartbeat(self):
+        # Lightweight debug pulse indicating inference loop is alive.
         hdr = Header()
         hdr.stamp = rospy.Time.now()
         hdr.frame_id = "falcon_obs_ok"
         self.debug_obs_pub.publish(hdr)
 
     def _process_one(self, depth_msg: Image, color_msg: Image = None, polar_msg: PointStamped = None):
+        # Single end-to-end control step: select goal -> build obs -> infer -> publish cmd.
         if polar_msg is None:
             polar_msg = self._pick_polar_for_stamp(depth_msg.header.stamp)
         if polar_msg is None:
@@ -391,6 +421,7 @@ class FalconRosBridge(object):
         self._process_one(depth_msg=depth_msg, color_msg=color_msg, polar_msg=polar_msg)
 
     def _watchdog_cb(self, _event):
+        # Fail-safe: stop robot if no successful inference for too long.
         if self.last_obs_time == rospy.Time(0):
             return
         dt = (rospy.Time.now() - self.last_obs_time).to_sec()
@@ -436,8 +467,8 @@ def parse_args():
     p.add_argument("--goal_obs_key", type=str, default="pointgoal_with_gps_compass")
     p.add_argument("--rgb_obs_key", type=str, default="articulated_agent_jaw_rgb")
 
-    p.add_argument("--forward_speed", type=float, default=0.2)
-    p.add_argument("--turn_speed", type=float, default=0.8)
+    p.add_argument("--forward_speed", type=float, default=0.3)
+    p.add_argument("--turn_speed", type=float, default=0.7)
     return p.parse_args()
 
 
