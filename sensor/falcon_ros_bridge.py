@@ -20,12 +20,10 @@ from typing import Dict
 from collections import deque
 import math
 
-from apriltag_ros.msg import AprilTagDetectionArray
 import cv2
 import numpy as np
 import rospy
 import torch
-from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped, Twist
 from gym.spaces import Box
 from gym.spaces import Dict as SpaceDict
@@ -37,6 +35,13 @@ import message_filters
 
 from habitat_baselines.rl.ddppo.policy import PointNavResNetPolicy
 from habitat_baselines.utils.common import batch_obs
+
+try:
+    from apriltag_ros.msg import AprilTagDetectionArray
+    _APRILTAG_MSG_OK = True
+except Exception:
+    AprilTagDetectionArray = None
+    _APRILTAG_MSG_OK = False
 
 
 def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
@@ -68,7 +73,6 @@ class FalconRosBridge(object):
 
     def __init__(self, args):
         rospy.init_node("falcon_ros_bridge", anonymous=False)
-        self.bridge = CvBridge()
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         rospy.loginfo("Falcon device: %s", str(self.device))
@@ -124,6 +128,11 @@ class FalconRosBridge(object):
         # - detections: convert AprilTag detections to (r, theta)
         # - topic: read (r, theta) directly from PointStamped
         if self.polar_source == "detections":
+            if not _APRILTAG_MSG_OK:
+                raise RuntimeError(
+                    "polar_source=detections requires apriltag_ros Python messages. "
+                    "Install/source apriltag_ros, or use --polar_source topic."
+                )
             self.detections_sub = message_filters.Subscriber(
                 args.detections_topic, AprilTagDetectionArray
             )
@@ -242,14 +251,36 @@ class FalconRosBridge(object):
             )
         return policy
 
+    @staticmethod
+    def _ros_image_to_numpy(msg: Image) -> np.ndarray:
+        # Convert common ROS Image encodings to numpy without cv_bridge.
+        if msg.encoding == "16UC1":
+            row_bytes = msg.width * 2
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+            arr = raw[:, :row_bytes].copy().view(np.uint16).reshape(msg.height, msg.width)
+        elif msg.encoding == "32FC1":
+            row_bytes = msg.width * 4
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+            arr = raw[:, :row_bytes].copy().view(np.float32).reshape(msg.height, msg.width)
+        elif msg.encoding in ("rgb8", "bgr8"):
+            row_bytes = msg.width * 3
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+            arr = raw[:, :row_bytes].copy().reshape(msg.height, msg.width, 3)
+        else:
+            raise ValueError("Unsupported image encoding: {}".format(msg.encoding))
+
+        if msg.is_bigendian:
+            arr = arr.byteswap().newbyteorder()
+        return arr
+
     def _depth_msg_to_norm_depth(self, depth_msg: Image) -> np.ndarray:
         # Accept either millimeter uint16 depth or meter float32 depth, then
         # normalize to [0, 1] and resize to policy resolution.
         if depth_msg.encoding == "16UC1":
-            depth_u16 = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="16UC1")
+            depth_u16 = self._ros_image_to_numpy(depth_msg)
             depth_m = depth_u16.astype(np.float32) * 0.001
         else:
-            depth_f32 = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="32FC1")
+            depth_f32 = self._ros_image_to_numpy(depth_msg)
             depth_m = depth_f32.astype(np.float32)
 
         depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
@@ -262,9 +293,9 @@ class FalconRosBridge(object):
     def _color_msg_to_rgb(self, color_msg: Image) -> np.ndarray:
         # Policy expects RGB uint8 with fixed spatial size.
         if color_msg.encoding == "rgb8":
-            rgb = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
+            rgb = self._ros_image_to_numpy(color_msg)
         else:
-            bgr = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
+            bgr = self._ros_image_to_numpy(color_msg)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         rgb = cv2.resize(rgb, (self.resolution, self.resolution), interpolation=cv2.INTER_LINEAR)
         return rgb.astype(np.uint8)
