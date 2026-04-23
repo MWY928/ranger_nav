@@ -12,7 +12,10 @@ if [ -f /home/mobile/ranger_ws/devel/setup.bash ]; then
   source /home/mobile/ranger_ws/devel/setup.bash
 fi
 
-python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
+source /home/mobile/miniconda3/etc/profile.d/conda.sh
+conda activate falcon
+
+exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/falcon_pretrained_25.pth" \
   --input_type depth \
   --polar_source topic \

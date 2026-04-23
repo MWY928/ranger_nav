@@ -1,0 +1,33 @@
+This is instruction for independent tag following feature
+
+Tracer + Tag Follower Quick Start
+
+1. Check hardware
+- Power on the robot
+- Release the emergency stop button
+- Connect the CAN/USB adapter
+- Connect the RealSense camera
+
+2. Start the Tracer base
+Open Terminal 1 and run:
+
+source /opt/ros/noetic/setup.bash
+source /home/mobile/catkin_ws/devel/setup.bash
+sudo modprobe gs_usb
+rosrun tracer_bringup bringup_can2usb.bash
+roslaunch tracer_bringup tracer_robot_base.launch
+
+3. Start the tag follower
+Open Terminal 2 and run:
+
+source /opt/ros/noetic/setup.bash
+source /home/mobile/catkin_ws/devel/setup.bash
+source /home/mobile/ranger_ws/devel/setup.bash
+source /home/mobile/miniconda3/etc/profile.d/conda.sh
+conda activate simple_nav
+roslaunch ranger_nav tag_follower.launch
+
+4. Notes
+- Use two separate terminals
+- Do not start the Tracer base inside the conda environment
+- If the robot does not move, first check whether the emergency stop is released

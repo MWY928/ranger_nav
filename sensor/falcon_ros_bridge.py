@@ -32,6 +32,10 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Header
 
 import message_filters
+import sys
+sys.path.append("/home/mobile/ranger_nav/habitat-baselines/")
+sys.path.append("/home/mobile/ranger_nav/habitat-lab/")
+sys.path.append("/home/mobile/ranger_nav")
 
 from habitat_baselines.rl.ddppo.policy import PointNavResNetPolicy
 from habitat_baselines.utils.common import batch_obs
@@ -237,7 +241,8 @@ class FalconRosBridge(object):
             normalize_visual_inputs=self.use_rgb,
         ).to(self.device)
 
-        ckpt = torch.load(checkpoint_path, map_location=self.device)
+        ckpt = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
+        ckpt = ckpt[0]["state_dict"]
         policy_sd = _extract_actor_critic_state_dict(ckpt)
         missing, unexpected = policy.load_state_dict(policy_sd, strict=False)
 
