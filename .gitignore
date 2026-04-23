@@ -127,4 +127,4 @@ habitat-lab/habitat/config/habitat/dataset/pointnav/hm3d_fin.yaml
 data/
 output_test/
 docs/
-res/
+res/*.pth
