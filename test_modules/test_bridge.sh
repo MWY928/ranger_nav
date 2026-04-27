@@ -16,7 +16,7 @@ source /home/mobile/miniconda3/etc/profile.d/conda.sh
 conda activate falcon
 
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
-  --checkpoint "$REPO_ROOT/falcon_pretrained_25.pth" \
+  --checkpoint "$REPO_ROOT/ours_hm3d_val_best.pth" \
   --input_type depth \
   --polar_source topic \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
