@@ -159,7 +159,7 @@ class TagToPolarNode(object):
         # y = theta
         # z = tag_id
         out.point.x = r
-        out.point.y = theta
+        out.point.y = -theta
         out.point.z = float(chosen_id)
 
         self.pub.publish(out)
