@@ -65,7 +65,7 @@ class TagFollowerNode(object):
             dist_err = 0.0
 
         # 角速度控制
-        cmd.angular.z = self.clamp(self.k_theta * theta,
+        cmd.angular.z = self.clamp(-self.k_theta * theta,
                                    -self.max_angular, self.max_angular)
 
         # 线速度控制
