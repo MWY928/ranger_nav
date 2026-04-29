@@ -4,7 +4,7 @@
 Falcon ROS bridge.
 
 Data flow (runtime):
-1) Subscribe RGB/Depth + goal signal (either polar topic or AprilTag detections).
+1) Subscribe Depth + goal signal (polar topic PointStamped).
 2) Build policy observation in Falcon/PointNav format.
 3) Run policy inference (Discrete(4)).
 4) Map discrete action to Twist and publish to cmd_vel.
@@ -18,7 +18,6 @@ Safety behavior:
 import argparse
 from typing import Dict
 from collections import deque
-import math
 
 import cv2
 import numpy as np
@@ -31,7 +30,6 @@ from gym.spaces import Discrete
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header
 
-import message_filters
 import sys
 sys.path.append("/home/mobile/ranger_nav/habitat-baselines/")
 sys.path.append("/home/mobile/ranger_nav/habitat-lab/")
@@ -39,13 +37,6 @@ sys.path.append("/home/mobile/ranger_nav")
 
 from habitat_baselines.rl.ddppo.policy import PointNavResNetPolicy
 from habitat_baselines.utils.common import batch_obs
-
-try:
-    from apriltag_ros.msg import AprilTagDetectionArray
-    _APRILTAG_MSG_OK = True
-except Exception:
-    AprilTagDetectionArray = None
-    _APRILTAG_MSG_OK = False
 
 
 def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
@@ -83,17 +74,12 @@ class FalconRosBridge(object):
 
         self.resolution = args.resolution
         self.max_depth_m = args.max_depth_m
-        self.use_rgb = args.input_type == "rgbd"
         self.deterministic = args.deterministic
         self.require_strict_ckpt = args.strict_checkpoint
-        self.polar_source = args.polar_source
-        self.target_tag_id = args.target_tag_id
-        self.use_first_detection = args.use_first_detection
 
         # Policy obs keys should match your social_nav_v2 config.
         self.depth_key = args.depth_obs_key
         self.goal_key = args.goal_obs_key
-        self.rgb_key = args.rgb_obs_key
 
         self.latest_polar_msg = None
         self.polar_buffer = deque(maxlen=max(10, args.polar_buffer_size))
@@ -122,53 +108,10 @@ class FalconRosBridge(object):
         self.cmd_pub = rospy.Publisher(args.cmd_vel_topic, Twist, queue_size=10)
         self.debug_obs_pub = rospy.Publisher(args.debug_obs_topic, Header, queue_size=10)
 
-        self.depth_sub = message_filters.Subscriber(args.depth_topic, Image)
-        self.color_sub = None
-        self.polar_sub = None
-        self.detections_sub = None
-        self.sync = None
-
-        # Two goal source modes:
-        # - detections: convert AprilTag detections to (r, theta)
-        # - topic: read (r, theta) directly from PointStamped
-        if self.polar_source == "detections":
-            if not _APRILTAG_MSG_OK:
-                raise RuntimeError(
-                    "polar_source=detections requires apriltag_ros Python messages. "
-                    "Install/source apriltag_ros, or use --polar_source topic."
-                )
-            self.detections_sub = message_filters.Subscriber(
-                args.detections_topic, AprilTagDetectionArray
-            )
-            if self.use_rgb:
-                self.color_sub = message_filters.Subscriber(args.color_topic, Image)
-                self.sync = message_filters.ApproximateTimeSynchronizer(
-                    [self.color_sub, self.depth_sub, self.detections_sub],
-                    queue_size=10,
-                    slop=args.sync_slop_sec,
-                )
-                self.sync.registerCallback(self._cb_rgbd_det)
-            else:
-                self.sync = message_filters.ApproximateTimeSynchronizer(
-                    [self.depth_sub, self.detections_sub],
-                    queue_size=10,
-                    slop=args.sync_slop_sec,
-                )
-                self.sync.registerCallback(self._cb_depth_det)
-        else:
-            self.polar_sub = rospy.Subscriber(
-                args.polar_topic, PointStamped, self._polar_cb, queue_size=20
-            )
-            if self.use_rgb:
-                self.color_sub = message_filters.Subscriber(args.color_topic, Image)
-                self.sync = message_filters.ApproximateTimeSynchronizer(
-                    [self.color_sub, self.depth_sub],
-                    queue_size=10,
-                    slop=args.sync_slop_sec,
-                )
-                self.sync.registerCallback(self._cb_rgbd)
-            else:
-                self.depth_sub.registerCallback(self._cb_depth)
+        self.polar_sub = rospy.Subscriber(
+            args.polar_topic, PointStamped, self._polar_cb, queue_size=20
+        )
+        self.depth_sub = rospy.Subscriber(args.depth_topic, Image, self._cb_depth, queue_size=10)
 
         self.action_to_cmd = {
             0: (0.0, 0.0),  # stop
@@ -178,22 +121,7 @@ class FalconRosBridge(object):
         }
 
         rospy.loginfo("Falcon ROS bridge started.")
-        rospy.loginfo("Polar source: %s", self.polar_source)
-        if self.polar_source == "detections":
-            if self.use_rgb:
-                rospy.loginfo(
-                    "Subscribe: %s, %s, %s",
-                    args.color_topic,
-                    args.depth_topic,
-                    args.detections_topic,
-                )
-            else:
-                rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.detections_topic)
-        else:
-            if self.use_rgb:
-                rospy.loginfo("Subscribe: %s, %s, %s", args.color_topic, args.depth_topic, args.polar_topic)
-            else:
-                rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
+        rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
         rospy.loginfo("Publish:   %s", args.cmd_vel_topic)
         self.watchdog = rospy.Timer(rospy.Duration(0.05), self._watchdog_cb)
 
@@ -220,13 +148,6 @@ class FalconRosBridge(object):
                 dtype=np.float32,
             ),
         }
-        if self.use_rgb:
-            spaces[self.rgb_key] = Box(
-                low=0,
-                high=255,
-                shape=(self.resolution, self.resolution, 3),
-                dtype=np.uint8,
-            )
 
         observation_space = SpaceDict(spaces)
         action_space = Discrete(4)
@@ -238,7 +159,7 @@ class FalconRosBridge(object):
             num_recurrent_layers=num_recurrent_layers,
             rnn_type=rnn_type,
             backbone=backbone,
-            normalize_visual_inputs=self.use_rgb,
+            normalize_visual_inputs=False,
         ).to(self.device)
 
         ckpt = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
@@ -295,17 +216,7 @@ class FalconRosBridge(object):
         depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1)
         return depth_norm
 
-    def _color_msg_to_rgb(self, color_msg: Image) -> np.ndarray:
-        # Policy expects RGB uint8 with fixed spatial size.
-        if color_msg.encoding == "rgb8":
-            rgb = self._ros_image_to_numpy(color_msg)
-        else:
-            bgr = self._ros_image_to_numpy(color_msg)
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        rgb = cv2.resize(rgb, (self.resolution, self.resolution), interpolation=cv2.INTER_LINEAR)
-        return rgb.astype(np.uint8)
-
-    def _build_obs(self, depth_msg: Image, polar_msg: PointStamped, color_msg: Image = None) -> Dict[str, np.ndarray]:
+    def _build_obs(self, depth_msg: Image, polar_msg: PointStamped) -> Dict[str, np.ndarray]:
         # Polar convention from sensor/polar_distance.py: x=r, y=theta.
         r = np.float32(polar_msg.point.x)
         theta = np.float32(polar_msg.point.y)
@@ -314,8 +225,6 @@ class FalconRosBridge(object):
             self.depth_key: self._depth_msg_to_norm_depth(depth_msg),
             self.goal_key: np.array([r, theta], dtype=np.float32),
         }
-        if self.use_rgb and color_msg is not None:
-            obs[self.rgb_key] = self._color_msg_to_rgb(color_msg)
         return obs
 
     def _infer_action(self, obs: Dict[str, np.ndarray]) -> int:
@@ -334,6 +243,20 @@ class FalconRosBridge(object):
             self.not_done_masks.fill_(True)
             self.prev_actions.copy_(action_data.actions)
         return int(action_data.env_actions[0][0].item())
+    # 放到 FalconRosBridge 类里，例如 _infer_action 后面
+    def _debug_print_once(self, obs, act_id):
+        g = obs[self.goal_key]
+        d = obs[self.depth_key]
+        lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
+        print(
+            "[DBG] goal[r,theta]=[{:.3f}, {:.3f}] depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
+            "act_id={} cmd=({:.3f},{:.3f})".format(
+                float(g[0]), float(g[1]),
+                tuple(d.shape), float(d.min()), float(d.max()),
+                int(act_id), float(lin), float(ang)
+            )
+        )
+
 
     def _publish_cmd(self, action_id: int):
         # Action id -> (linear x, angular z).
@@ -376,44 +299,6 @@ class FalconRosBridge(object):
             return None
         return best
 
-    def _detections_to_polar(self, msg: AprilTagDetectionArray):
-        # Convert selected AprilTag detection pose to pointgoal-like polar target.
-        # pose x/z are interpreted in camera frame.
-        if msg is None or len(msg.detections) == 0:
-            return None
-
-        chosen_detection = None
-        chosen_id = None
-
-        if self.use_first_detection:
-            det = msg.detections[0]
-            if len(det.id) > 0:
-                chosen_detection = det
-                chosen_id = det.id[0]
-        else:
-            for det in msg.detections:
-                if len(det.id) == 0:
-                    continue
-                if det.id[0] == self.target_tag_id:
-                    chosen_detection = det
-                    chosen_id = det.id[0]
-                    break
-
-        if chosen_detection is None:
-            return None
-
-        pose = chosen_detection.pose.pose.pose
-        px = pose.position.x
-        pz = pose.position.z
-
-        out = PointStamped()
-        out.header.stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
-        out.header.frame_id = msg.header.frame_id if msg.header.frame_id else "camera_color_optical_frame"
-        out.point.x = math.sqrt(px * px + pz * pz)
-        out.point.y = math.atan2(px, pz)
-        out.point.z = float(chosen_id)
-        return out
-
     def _emit_heartbeat(self):
         # Lightweight debug pulse indicating inference loop is alive.
         hdr = Header()
@@ -421,20 +306,19 @@ class FalconRosBridge(object):
         hdr.frame_id = "falcon_obs_ok"
         self.debug_obs_pub.publish(hdr)
 
-    def _process_one(self, depth_msg: Image, color_msg: Image = None, polar_msg: PointStamped = None):
+    def _process_one(self, depth_msg: Image, polar_msg: PointStamped = None):
         # Single end-to-end control step: select goal -> build obs -> infer -> publish cmd.
         if polar_msg is None:
             polar_msg = self._pick_polar_for_stamp(depth_msg.header.stamp)
         if polar_msg is None:
-            if self.polar_source == "detections":
-                rospy.logwarn_throttle(2.0, "No valid tag detection for polar conversion.")
-            else:
-                rospy.logwarn_throttle(2.0, "No polar message received yet on polar topic.")
+            rospy.logwarn_throttle(2.0, "No polar message received yet on polar topic.")
             self._publish_stop()
             return
         try:
-            obs = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg, color_msg=color_msg)
+            obs = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
             act_id = self._infer_action(obs)
+            #debug print obs and action id
+            self._debug_print_once(obs, act_id)
             self._publish_cmd(act_id)
             self.last_obs_time = rospy.Time.now()
             self._emit_heartbeat()
@@ -443,18 +327,7 @@ class FalconRosBridge(object):
             rospy.logerr_throttle(1.0, "Falcon ROS bridge callback failed: %s", str(e))
 
     def _cb_depth(self, depth_msg: Image):
-        self._process_one(depth_msg=depth_msg, color_msg=None)
-
-    def _cb_rgbd(self, color_msg: Image, depth_msg: Image):
-        self._process_one(depth_msg=depth_msg, color_msg=color_msg)
-
-    def _cb_depth_det(self, depth_msg: Image, det_msg: AprilTagDetectionArray):
-        polar_msg = self._detections_to_polar(det_msg)
-        self._process_one(depth_msg=depth_msg, color_msg=None, polar_msg=polar_msg)
-
-    def _cb_rgbd_det(self, color_msg: Image, depth_msg: Image, det_msg: AprilTagDetectionArray):
-        polar_msg = self._detections_to_polar(det_msg)
-        self._process_one(depth_msg=depth_msg, color_msg=color_msg, polar_msg=polar_msg)
+        self._process_one(depth_msg=depth_msg)
 
     def _watchdog_cb(self, _event):
         # Fail-safe: stop robot if no successful inference for too long.
@@ -470,19 +343,14 @@ class FalconRosBridge(object):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="ROS RGBD+(Polar/Detections) -> Falcon -> cmd_vel bridge")
+    p = argparse.ArgumentParser(description="ROS Depth+Polar -> Falcon -> cmd_vel bridge")
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--input_type", type=str, default="depth", choices=["depth", "rgbd"])
-    p.add_argument("--polar_source", type=str, default="topic", choices=["topic", "detections"])
 
-    p.add_argument("--color_topic", type=str, default="/camera/color/image_raw")
     p.add_argument("--depth_topic", type=str, default="/camera/aligned_depth_to_color/image_raw")
     p.add_argument("--polar_topic", type=str, default="/tag_polar")
-    p.add_argument("--detections_topic", type=str, default="/tag_detections")
     p.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel")
     p.add_argument("--debug_obs_topic", type=str, default="/falcon/obs_heartbeat")
 
-    p.add_argument("--sync_slop_sec", type=float, default=0.08)
     p.add_argument("--resolution", type=int, default=256)
     p.add_argument("--max_depth_m", type=float, default=10.0)
 
@@ -495,13 +363,10 @@ def parse_args():
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)
-    p.add_argument("--target_tag_id", type=int, default=0)
-    p.add_argument("--use_first_detection", action="store_true")
 
     # Default to non-agent-prefixed keys used by PointNavResNetPolicy sensor handling.
     p.add_argument("--depth_obs_key", type=str, default="articulated_agent_jaw_depth")
     p.add_argument("--goal_obs_key", type=str, default="pointgoal_with_gps_compass")
-    p.add_argument("--rgb_obs_key", type=str, default="articulated_agent_jaw_rgb")
 
     p.add_argument("--forward_speed", type=float, default=0.3)
     p.add_argument("--turn_speed", type=float, default=0.7)

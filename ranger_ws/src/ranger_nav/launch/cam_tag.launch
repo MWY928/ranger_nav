@@ -1,31 +1,80 @@
-<launch>
-  <!-- 1) 启动你自己的 RealSense 发布节点 -->
+﻿<launch>
+  <!-- ========== 可调参数 ========== -->
+  <arg name="fps" default="30" />
+  <arg name="align_to_color" default="true" />
+
+  <arg name="color_topic" default="/camera/color/image_raw" />
+  <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw" />
+  <arg name="color_info_topic" default="/camera/color/camera_info" />
+  <arg name="depth_info_topic" default="/camera/aligned_depth_to_color/camera_info" />
+
+  <arg name="color_frame_id" default="camera_color_optical_frame" />
+  <arg name="depth_frame_id" default="camera_color_optical_frame" />
+
+  <arg name="detections_topic" default="/tag_detections" />
+  <arg name="polar_topic" default="/tag_polar" />
+  <arg name="target_tag_id" default="0" />
+  <arg name="use_first_detection" default="false" />
+
+  <!-- polar_goal_tracker 常用参数 -->
+  <arg name="odom_topic" default="/odom" />
+  <arg name="theta_offset_rad" default="-0.1" />
+  <arg name="theta_deadband_rad" default="0.0" />
+  <arg name="lost_timeout_sec" default="0.20" />
+  <arg name="predict_timeout_sec" default="6.0" />
+  <arg name="publish_rate_hz" default="20.0" />
+
+  <!-- 如果你有多个 RealSense，可以传 serial；没有就留空 -->
+  <arg name="serial" default="" />
+
+  <!-- ========== 1) 启动相机 ========== -->
   <node pkg="ranger_nav"
         type="realsense_stream.py"
         name="realsense_rgbd_node"
         output="screen">
-    <param name="fps" value="30" />
-    <param name="align_to_color" value="true" />
-    <param name="color_topic" value="/camera/color/image_raw" />
-    <param name="depth_topic" value="/camera/aligned_depth_to_color/image_raw" />
-    <param name="color_info_topic" value="/camera/color/camera_info" />
-    <param name="depth_info_topic" value="/camera/aligned_depth_to_color/camera_info" />
-    <param name="color_frame_id" value="camera_color_optical_frame" />
-    <param name="depth_frame_id" value="camera_color_optical_frame" />
+    <param name="fps" value="$(arg fps)" />
+    <param name="align_to_color" value="$(arg align_to_color)" />
+
+    <param name="color_topic" value="$(arg color_topic)" />
+    <param name="depth_topic" value="$(arg depth_topic)" />
+    <param name="color_info_topic" value="$(arg color_info_topic)" />
+    <param name="depth_info_topic" value="$(arg depth_info_topic)" />
+
+    <param name="color_frame_id" value="$(arg color_frame_id)" />
+    <param name="depth_frame_id" value="$(arg depth_frame_id)" />
+
+    <!-- serial 为空时脚本会自动选第一个设备 -->
+    <param name="serial" value="$(arg serial)" />
   </node>
 
-  <!-- 2) AprilTag 参数 -->
-  <rosparam command="load" file="$(find my_camera_pkg)/config/tags.yaml"/>
-
-  <!-- 3) 启动 apriltag_ros -->
+  <!-- ========== 2) 启动 AprilTag 检测 ========== -->
   <node pkg="apriltag_ros"
         type="apriltag_ros_continuous_node"
         name="apriltag_detector"
         output="screen"
         clear_params="true">
 
-    <!-- 这里把 apriltag_ros 默认输入 remap 到你的相机 topic -->
-    <remap from="image_rect" to="/camera/color/image_raw" />
-    <remap from="camera_info" to="/camera/color/camera_info" />
+    <rosparam command="load" file="$(find ranger_nav)/config/tags.yaml" />
+
+    <remap from="image_rect" to="$(arg color_topic)" />
+    <remap from="camera_info" to="$(arg color_info_topic)" />
+  </node>
+
+  <!-- ========== 3) 启动 polar goal tracker ========== -->
+  <node pkg="ranger_nav"
+        type="polar_goal_tracker.py"
+        name="polar_goal_tracker_node"
+        output="screen">
+    <param name="detections_topic" value="$(arg detections_topic)" />
+    <param name="output_topic" value="$(arg polar_topic)" />
+    <param name="target_tag_id" value="$(arg target_tag_id)" />
+    <param name="use_first_detection" value="$(arg use_first_detection)" />
+
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="theta_offset_rad" value="$(arg theta_offset_rad)" />
+    <param name="theta_deadband_rad" value="$(arg theta_deadband_rad)" />
+    <param name="lost_timeout_sec" value="$(arg lost_timeout_sec)" />
+    <param name="predict_timeout_sec" value="$(arg predict_timeout_sec)" />
+    <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
   </node>
 </launch>
