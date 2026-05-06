@@ -77,6 +77,8 @@ class FalconRosBridge(object):
         self.deterministic = args.deterministic
         self.require_strict_ckpt = args.strict_checkpoint
         self.debug_mapping = args.debug_mapping
+        self.theta_deadband_rad = args.theta_deadband_rad
+        self.theta_excess_offset_rad = args.theta_excess_offset_rad
 
         # Policy obs keys should match your social_nav_v2 config.
         self.depth_key = args.depth_obs_key
@@ -220,13 +222,25 @@ class FalconRosBridge(object):
     def _build_obs(self, depth_msg: Image, polar_msg: PointStamped) -> Dict[str, np.ndarray]:
         # Polar convention from sensor/polar_distance.py: x=r, y=theta.
         r = np.float32(polar_msg.point.x)
-        theta = np.float32(polar_msg.point.y)
+        theta = np.float32(self._shape_theta(float(polar_msg.point.y)))
 
         obs = {
             self.depth_key: self._depth_msg_to_norm_depth(depth_msg),
             self.goal_key: np.array([r, theta], dtype=np.float32),
         }
         return obs
+
+    def _shape_theta(self, theta: float) -> float:
+        # Piecewise angular shaping for discrete control:
+        # - if |theta| <= deadband: treat as 0
+        # - else: keep sign and subtract a fixed offset from magnitude
+        a = abs(theta)
+        if a <= self.theta_deadband_rad:
+            return 0.0
+        reduced = a - self.theta_excess_offset_rad
+        if reduced < 0.0:
+            reduced = 0.0
+        return reduced if theta >= 0.0 else -reduced
 
     def _infer_action(self, obs: Dict[str, np.ndarray]) -> int:
         # Recurrent policy inference:
@@ -245,14 +259,14 @@ class FalconRosBridge(object):
             self.prev_actions.copy_(action_data.actions)
         return int(action_data.env_actions[0][0].item())
     # 放到 FalconRosBridge 类里，例如 _infer_action 后面
-    def _debug_print_once(self, obs, act_id):
+    def _debug_print_once(self, obs, act_id, theta_raw):
         g = obs[self.goal_key]
         d = obs[self.depth_key]
         lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
         rospy.loginfo(
-            "[DBG] goal[r,theta]=[{:.3f}, {:.3f}] depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
+            "[DBG] goal[r,theta]=[{:.3f}, {:.3f}] theta_raw={:.3f} depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
             "act_id={} cmd=({:.3f},{:.3f})".format(
-                float(g[0]), float(g[1]),
+                float(g[0]), float(g[1]), float(theta_raw),
                 tuple(d.shape), float(d.min()), float(d.max()),
                 int(act_id), float(lin), float(ang)
             )
@@ -316,10 +330,11 @@ class FalconRosBridge(object):
             self._publish_stop()
             return
         try:
+            theta_raw = float(polar_msg.point.y)
             obs = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
             act_id = self._infer_action(obs)
             if self.debug_mapping:
-                self._debug_print_once(obs, act_id)
+                self._debug_print_once(obs, act_id, theta_raw)
             self._publish_cmd(act_id)
             self.last_obs_time = rospy.Time.now()
             self._emit_heartbeat()
@@ -376,6 +391,8 @@ def parse_args():
 
     p.add_argument("--forward_speed", type=float, default=0.3)
     p.add_argument("--turn_speed", type=float, default=0.3)
+    p.add_argument("--theta_deadband_rad", type=float, default=0.15)
+    p.add_argument("--theta_excess_offset_rad", type=float, default=0.15)
     return p.parse_args()
 
 
