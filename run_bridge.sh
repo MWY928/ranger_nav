@@ -2,7 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
 
 source /opt/ros/noetic/setup.bash
 if [ -f /home/mobile/catkin_ws/devel/setup.bash ]; then
@@ -19,7 +19,4 @@ exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/ours_hm3d_val_best.pth" \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
   --polar_topic /tag_polar \
-  --cmd_vel_topic /cmd_vel \
-  --debug_mapping
-
-  
+  --cmd_vel_topic /cmd_vel

@@ -76,6 +76,7 @@ class FalconRosBridge(object):
         self.max_depth_m = args.max_depth_m
         self.deterministic = args.deterministic
         self.require_strict_ckpt = args.strict_checkpoint
+        self.debug_mapping = args.debug_mapping
 
         # Policy obs keys should match your social_nav_v2 config.
         self.depth_key = args.depth_obs_key
@@ -248,7 +249,7 @@ class FalconRosBridge(object):
         g = obs[self.goal_key]
         d = obs[self.depth_key]
         lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
-        print(
+        rospy.loginfo(
             "[DBG] goal[r,theta]=[{:.3f}, {:.3f}] depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
             "act_id={} cmd=({:.3f},{:.3f})".format(
                 float(g[0]), float(g[1]),
@@ -317,8 +318,8 @@ class FalconRosBridge(object):
         try:
             obs = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
             act_id = self._infer_action(obs)
-            #debug print obs and action id
-            self._debug_print_once(obs, act_id)
+            if self.debug_mapping:
+                self._debug_print_once(obs, act_id)
             self._publish_cmd(act_id)
             self.last_obs_time = rospy.Time.now()
             self._emit_heartbeat()
@@ -345,6 +346,10 @@ class FalconRosBridge(object):
 def parse_args():
     p = argparse.ArgumentParser(description="ROS Depth+Polar -> Falcon -> cmd_vel bridge")
     p.add_argument("--checkpoint", type=str, required=True)
+    # Backward-compatibility flags kept for old launch scripts.
+    # They are ignored because this bridge is now fixed to depth + polar topic.
+    p.add_argument("--input_type", type=str, default="depth", choices=["depth", "rgbd"])
+    p.add_argument("--polar_source", type=str, default="topic", choices=["topic", "detections"])
 
     p.add_argument("--depth_topic", type=str, default="/camera/aligned_depth_to_color/image_raw")
     p.add_argument("--polar_topic", type=str, default="/tag_polar")
@@ -360,6 +365,7 @@ def parse_args():
     p.add_argument("--rnn_type", type=str, default="LSTM")
     p.add_argument("--deterministic", action="store_true")
     p.add_argument("--strict_checkpoint", action="store_true")
+    p.add_argument("--debug_mapping", action="store_true")
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)
@@ -369,7 +375,7 @@ def parse_args():
     p.add_argument("--goal_obs_key", type=str, default="pointgoal_with_gps_compass")
 
     p.add_argument("--forward_speed", type=float, default=0.3)
-    p.add_argument("--turn_speed", type=float, default=0.7)
+    p.add_argument("--turn_speed", type=float, default=0.3)
     return p.parse_args()
 
 
