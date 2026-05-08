@@ -16,7 +16,7 @@ Safety behavior:
 """
 
 import argparse
-from typing import Dict
+from typing import Dict, Optional, Tuple
 from collections import deque
 
 import cv2
@@ -77,6 +77,7 @@ class FalconRosBridge(object):
         self.deterministic = args.deterministic
         self.require_strict_ckpt = args.strict_checkpoint
         self.debug_mapping = args.debug_mapping
+        self.debug_depth = args.debug_depth
         self.theta_deadband_rad = args.theta_deadband_rad
         self.theta_excess_offset_rad = args.theta_excess_offset_rad
 
@@ -202,33 +203,89 @@ class FalconRosBridge(object):
             arr = arr.byteswap().newbyteorder()
         return arr
 
-    def _depth_msg_to_norm_depth(self, depth_msg: Image) -> np.ndarray:
+    @staticmethod
+    def _depth_stats(arr: np.ndarray) -> Dict[str, float]:
+        arr_f = arr.astype(np.float32, copy=False)
+        finite = np.isfinite(arr_f)
+        valid = arr_f[finite]
+        total = float(arr_f.size)
+        if valid.size == 0:
+            return {
+                "valid_ratio": 0.0,
+                "min": float("nan"),
+                "max": float("nan"),
+                "mean": float("nan"),
+                "p50": float("nan"),
+                "p95": float("nan"),
+                "zero_ratio": 0.0,
+            }
+
+        return {
+            "valid_ratio": float(valid.size) / total,
+            "min": float(np.min(valid)),
+            "max": float(np.max(valid)),
+            "mean": float(np.mean(valid)),
+            "p50": float(np.percentile(valid, 50)),
+            "p95": float(np.percentile(valid, 95)),
+            "zero_ratio": float(np.mean(valid == 0.0)),
+        }
+
+    def _depth_msg_to_norm_depth(
+        self, depth_msg: Image
+    ) -> Tuple[np.ndarray, Dict[str, object]]:
         # Accept either millimeter uint16 depth or meter float32 depth, then
         # normalize to [0, 1] and resize to policy resolution.
+        debug = {
+            "encoding": depth_msg.encoding,
+            "raw_shape": None,
+            "raw_dtype": None,
+            "raw_unit": "m",
+            "raw_stats": None,
+            "depth_m_stats": None,
+            "norm_shape": None,
+            "norm_dtype": None,
+            "norm_stats": None,
+        }
+
         if depth_msg.encoding == "16UC1":
             depth_u16 = self._ros_image_to_numpy(depth_msg)
+            debug["raw_shape"] = tuple(depth_u16.shape)
+            debug["raw_dtype"] = str(depth_u16.dtype)
+            debug["raw_unit"] = "mm"
+            debug["raw_stats"] = self._depth_stats(depth_u16)
             depth_m = depth_u16.astype(np.float32) * 0.001
         else:
             depth_f32 = self._ros_image_to_numpy(depth_msg)
+            debug["raw_shape"] = tuple(depth_f32.shape)
+            debug["raw_dtype"] = str(depth_f32.dtype)
+            debug["raw_unit"] = "m"
+            debug["raw_stats"] = self._depth_stats(depth_f32)
             depth_m = depth_f32.astype(np.float32)
 
         depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
         depth_m = np.clip(depth_m, 0.0, self.max_depth_m)
+        debug["depth_m_stats"] = self._depth_stats(depth_m)
         depth_norm = depth_m / self.max_depth_m
         depth_norm = cv2.resize(depth_norm, (self.resolution, self.resolution), interpolation=cv2.INTER_NEAREST)
         depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1)
-        return depth_norm
+        debug["norm_shape"] = tuple(depth_norm.shape)
+        debug["norm_dtype"] = str(depth_norm.dtype)
+        debug["norm_stats"] = self._depth_stats(depth_norm)
+        return depth_norm, debug
 
-    def _build_obs(self, depth_msg: Image, polar_msg: PointStamped) -> Dict[str, np.ndarray]:
+    def _build_obs(
+        self, depth_msg: Image, polar_msg: PointStamped
+    ) -> Tuple[Dict[str, np.ndarray], Dict[str, object]]:
         # Polar convention from sensor/polar_distance.py: x=r, y=theta.
         r = np.float32(polar_msg.point.x)
         theta = np.float32(self._shape_theta(float(polar_msg.point.y)))
+        depth_norm, depth_debug = self._depth_msg_to_norm_depth(depth_msg)
 
         obs = {
-            self.depth_key: self._depth_msg_to_norm_depth(depth_msg),
+            self.depth_key: depth_norm,
             self.goal_key: np.array([r, theta], dtype=np.float32),
         }
-        return obs
+        return obs, depth_debug
 
     def _shape_theta(self, theta: float) -> float:
         # Piecewise angular shaping for discrete control:
@@ -242,33 +299,101 @@ class FalconRosBridge(object):
             reduced = 0.0
         return reduced if theta >= 0.0 else -reduced
 
-    def _infer_action(self, obs: Dict[str, np.ndarray]) -> int:
+    def _infer_action(
+        self, obs: Dict[str, np.ndarray]
+    ) -> Tuple[int, Optional[np.ndarray]]:
         # Recurrent policy inference:
         # hidden_states/prev_actions/not_done_masks are carried across timesteps.
         batch = batch_obs([obs], device=self.device)
         with torch.no_grad():
-            action_data = self.actor_critic.act(
+            features, next_hidden_states, _ = self.actor_critic.net(
                 batch,
                 self.hidden_states,
                 self.prev_actions,
                 self.not_done_masks,
-                deterministic=self.deterministic,
             )
-            self.hidden_states = action_data.rnn_hidden_states
+            distribution = self.actor_critic.action_distribution(features)
+            if self.deterministic:
+                if self.actor_critic.action_distribution_type == "categorical":
+                    actions = distribution.mode()
+                elif self.actor_critic.action_distribution_type == "gaussian":
+                    actions = distribution.mean
+                else:
+                    actions = distribution.sample()
+            else:
+                actions = distribution.sample()
+
+            self.hidden_states = next_hidden_states
             self.not_done_masks.fill_(True)
-            self.prev_actions.copy_(action_data.actions)
-        return int(action_data.env_actions[0][0].item())
+            self.prev_actions.copy_(actions)
+
+            probs = None
+            if self.actor_critic.action_distribution_type == "categorical":
+                probs = distribution.probs[0].detach().cpu().numpy()
+
+        return int(actions[0][0].item()), probs
     # 放到 FalconRosBridge 类里，例如 _infer_action 后面
-    def _debug_print_once(self, obs, act_id, theta_raw):
+    @staticmethod
+    def _fmt_stats(stats: Dict[str, float]) -> str:
+        return (
+            "valid={:.1f}% min={:.3f} max={:.3f} mean={:.3f} p50={:.3f} p95={:.3f} zero={:.1f}%".format(
+                100.0 * stats["valid_ratio"],
+                stats["min"],
+                stats["max"],
+                stats["mean"],
+                stats["p50"],
+                stats["p95"],
+                100.0 * stats["zero_ratio"],
+            )
+        )
+
+    def _fmt_action_probs(self, probs: Optional[np.ndarray]) -> str:
+        if probs is None:
+            return "N/A(non-categorical)"
+        labels = ["stop", "forward", "left", "right"]
+        items = []
+        for i, p in enumerate(probs.tolist()):
+            name = labels[i] if i < len(labels) else "a{}".format(i)
+            items.append("{}:{:.3f}".format(name, float(p)))
+        return " ".join(items)
+
+    def _debug_print_once(
+        self,
+        obs: Dict[str, np.ndarray],
+        act_id: int,
+        theta_raw: float,
+        probs: Optional[np.ndarray],
+        depth_debug: Dict[str, object],
+    ):
         g = obs[self.goal_key]
         d = obs[self.depth_key]
         lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
+
+        if self.debug_depth:
+            rospy.loginfo(
+                "[DBG_DEPTH] ros(enc={}, raw={} {}, unit={}) raw_stats=[{}] depth_m_stats=[{}] "
+                "falcon_expected(shape=({}, {}, 1), dtype=float32, norm=[0,1]) falcon_input(actual={} {}) norm_stats=[{}]".format(
+                    depth_debug["encoding"],
+                    depth_debug["raw_shape"],
+                    depth_debug["raw_dtype"],
+                    depth_debug["raw_unit"],
+                    self._fmt_stats(depth_debug["raw_stats"]),
+                    self._fmt_stats(depth_debug["depth_m_stats"]),
+                    self.resolution,
+                    self.resolution,
+                    depth_debug["norm_shape"],
+                    depth_debug["norm_dtype"],
+                    self._fmt_stats(depth_debug["norm_stats"]),
+                )
+            )
+
         rospy.loginfo(
-            "[DBG] goal[r,theta]=[{:.3f}, {:.3f}] theta_raw={:.3f} depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
-            "act_id={} cmd=({:.3f},{:.3f})".format(
+            "[DBG_ACT] goal[r,theta]=[{:.3f}, {:.3f}] theta_raw={:.3f} depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
+            "act_id={} cmd=({:.3f},{:.3f}) probs=[{}]".format(
                 float(g[0]), float(g[1]), float(theta_raw),
                 tuple(d.shape), float(d.min()), float(d.max()),
-                int(act_id), float(lin), float(ang)
+                int(act_id), float(lin), float(ang),
+                self._fmt_action_probs(probs),
             )
         )
 
@@ -331,10 +456,10 @@ class FalconRosBridge(object):
             return
         try:
             theta_raw = float(polar_msg.point.y)
-            obs = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
-            act_id = self._infer_action(obs)
-            if self.debug_mapping:
-                self._debug_print_once(obs, act_id, theta_raw)
+            obs, depth_debug = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
+            act_id, probs = self._infer_action(obs)
+            if self.debug_mapping or self.debug_depth:
+                self._debug_print_once(obs, act_id, theta_raw, probs, depth_debug)
             self._publish_cmd(act_id)
             self.last_obs_time = rospy.Time.now()
             self._emit_heartbeat()
@@ -381,6 +506,7 @@ def parse_args():
     p.add_argument("--deterministic", action="store_true")
     p.add_argument("--strict_checkpoint", action="store_true")
     p.add_argument("--debug_mapping", action="store_true")
+    p.add_argument("--debug_depth", action="store_true")
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)
