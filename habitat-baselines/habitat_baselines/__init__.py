@@ -17,6 +17,10 @@ from habitat_baselines.rl.ver.ver_trainer import VERTrainer
 from habitat_baselines.rl.ppo.orca_trainer import ORCANoTrainer
 from habitat_baselines.rl.ppo.falcon_trainer import FalconTrainer
 from habitat_baselines.version import VERSION as __version__  # noqa: F401
+import sys
+sys.path.append("/home/mobile/ranger_nav/habitat-baselines/")
+sys.path.append("/home/mobile/ranger_nav/habitat-lab/")
+sys.path.append("/home/mobile/ranger_nav")
 
 __all__ = [
     "BaseTrainer",
