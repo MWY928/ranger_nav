@@ -270,7 +270,7 @@ class FalconRosBridge(object):
             debug["raw_dtype"] = str(depth_f32.dtype)
             debug["raw_unit"] = "m"
             debug["raw_stats"] = self._depth_stats(depth_f32)
-            depth_m = depth_f32.astype(np.float32)
+            depth_m = depth_f32.astype(np.float32)*0.001
 
         depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
         depth_m = np.clip(depth_m, 0.0, self.max_depth_m)
