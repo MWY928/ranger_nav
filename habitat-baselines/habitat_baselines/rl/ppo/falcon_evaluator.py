@@ -1,6 +1,7 @@
 import os
+import time
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -33,6 +34,104 @@ class FALCONEvaluator(Evaluator):
     Only difference is record the success rate of each episode while evaluating.
     Similar to ORCAEvaluator.
     """
+    @staticmethod
+    def _depth_stats(arr: np.ndarray) -> Dict[str, float]:
+        arr_f = arr.astype(np.float32, copy=False)
+        finite = np.isfinite(arr_f)
+        valid = arr_f[finite]
+        total = float(arr_f.size)
+        if valid.size == 0:
+            return {
+                "valid_ratio": 0.0,
+                "min": float("nan"),
+                "max": float("nan"),
+                "mean": float("nan"),
+                "p50": float("nan"),
+                "p95": float("nan"),
+                "zero_ratio": 0.0,
+            }
+
+        return {
+            "valid_ratio": float(valid.size) / total,
+            "min": float(np.min(valid)),
+            "max": float(np.max(valid)),
+            "mean": float(np.mean(valid)),
+            "p50": float(np.percentile(valid, 50)),
+            "p95": float(np.percentile(valid, 95)),
+            "zero_ratio": float(np.mean(valid == 0.0)),
+        }
+
+    @staticmethod
+    def _select_depth_key(obs0: Dict[str, Any], config) -> Optional[str]:
+        explicit = config.habitat_baselines.eval.depth_dump_obs_key
+        if explicit and explicit in obs0:
+            return explicit
+
+        for k in config.habitat.gym.obs_keys:
+            if "depth" in k and k in obs0:
+                return k
+
+        for k in obs0.keys():
+            if "depth" in k:
+                return k
+        return None
+
+    def _dump_depth_sample_once(self, observations, config) -> None:
+        if getattr(self, "_depth_sample_dumped", False):
+            return
+        if not config.habitat_baselines.eval.depth_dump_enabled:
+            return
+        if observations is None or len(observations) == 0:
+            return
+
+        obs0 = observations[0]
+        if not isinstance(obs0, dict):
+            return
+
+        key = self._select_depth_key(obs0, config)
+        if key is None:
+            logger.warn("Depth dump enabled but no depth observation key found.")
+            return
+
+        depth = obs0[key]
+        if torch.is_tensor(depth):
+            depth = depth.detach().cpu().numpy()
+        depth_np = np.asarray(depth)
+
+        out_dir = config.habitat_baselines.eval.depth_dump_dir
+        os.makedirs(out_dir, exist_ok=True)
+
+        stamp = f"{time.time_ns()}_{os.getpid()}"
+        safe_key = key.replace("/", "_")
+        prefix = f"sim_depth_sample_{safe_key}_{stamp}"
+
+        raw_npy = os.path.join(out_dir, prefix + "_raw.npy")
+        raw_csv = os.path.join(out_dir, prefix + "_raw.csv")
+        meta_json = os.path.join(out_dir, prefix + "_meta.json")
+
+        np.save(raw_npy, depth_np)
+        if config.habitat_baselines.eval.depth_dump_save_csv:
+            csv_view = depth_np
+            if csv_view.ndim == 3 and csv_view.shape[-1] == 1:
+                csv_view = csv_view[..., 0]
+            if csv_view.ndim == 2:
+                np.savetxt(raw_csv, csv_view, delimiter=",", fmt="%.6f")
+
+        meta = {
+            "obs_key": key,
+            "shape": list(depth_np.shape),
+            "dtype": str(depth_np.dtype),
+            "stats": self._depth_stats(depth_np),
+            "raw_npy": raw_npy,
+            "raw_csv": raw_csv if os.path.exists(raw_csv) else None,
+        }
+        with open(meta_json, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        self._depth_sample_dumped = True
+        logger.info(
+            f"[DepthDump] Saved one depth sample: key={key}, npy={raw_npy}, meta={meta_json}"
+        )
 
     def evaluate_agent(
         self,
@@ -47,9 +146,11 @@ class FALCONEvaluator(Evaluator):
         env_spec,
         rank0_keys,
     ):
+        self._depth_sample_dumped = False
         success_cal = 0 ## my added
         observations = envs.reset()
         observations = envs.post_step(observations)
+        self._dump_depth_sample_once(observations, config)
         batch = batch_obs(observations, device=device)
         batch = apply_obs_transforms_batch(batch, obs_transforms)  # type: ignore
 

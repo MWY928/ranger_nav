@@ -18,6 +18,8 @@ Safety behavior:
 import argparse
 from typing import Dict, Optional, Tuple
 from collections import deque
+import json
+import os
 
 import cv2
 import numpy as np
@@ -78,6 +80,8 @@ class FalconRosBridge(object):
         self.require_strict_ckpt = args.strict_checkpoint
         self.debug_mapping = args.debug_mapping
         self.debug_depth = args.debug_depth
+        self.debug_depth_dump_dir = args.debug_depth_dump_dir
+        self._depth_sample_saved = False
         self.theta_deadband_rad = args.theta_deadband_rad
         self.theta_excess_offset_rad = args.theta_excess_offset_rad
 
@@ -123,6 +127,10 @@ class FalconRosBridge(object):
             2: (0.0, args.turn_speed),  # turn left
             3: (0.0, -args.turn_speed),  # turn right
         }
+
+        if self.debug_depth:
+            os.makedirs(self.debug_depth_dump_dir, exist_ok=True)
+            rospy.loginfo("Depth debug dump dir: %s", self.debug_depth_dump_dir)
 
         rospy.loginfo("Falcon ROS bridge started.")
         rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
@@ -249,6 +257,7 @@ class FalconRosBridge(object):
 
         if depth_msg.encoding == "16UC1":
             depth_u16 = self._ros_image_to_numpy(depth_msg)
+            raw_depth = depth_u16
             debug["raw_shape"] = tuple(depth_u16.shape)
             debug["raw_dtype"] = str(depth_u16.dtype)
             debug["raw_unit"] = "mm"
@@ -256,6 +265,7 @@ class FalconRosBridge(object):
             depth_m = depth_u16.astype(np.float32) * 0.001
         else:
             depth_f32 = self._ros_image_to_numpy(depth_msg)
+            raw_depth = depth_f32
             debug["raw_shape"] = tuple(depth_f32.shape)
             debug["raw_dtype"] = str(depth_f32.dtype)
             debug["raw_unit"] = "m"
@@ -271,7 +281,68 @@ class FalconRosBridge(object):
         debug["norm_shape"] = tuple(depth_norm.shape)
         debug["norm_dtype"] = str(depth_norm.dtype)
         debug["norm_stats"] = self._depth_stats(depth_norm)
+
+        self._maybe_dump_depth_sample_once(
+            raw_depth=raw_depth,
+            depth_m=depth_m,
+            depth_norm=depth_norm,
+            depth_debug=debug,
+        )
         return depth_norm, debug
+
+    def _maybe_dump_depth_sample_once(
+        self,
+        raw_depth: np.ndarray,
+        depth_m: np.ndarray,
+        depth_norm: np.ndarray,
+        depth_debug: Dict[str, object],
+    ):
+        if not self.debug_depth or self._depth_sample_saved:
+            return
+
+        stamp_ns = int(rospy.Time.now().to_nsec())
+        prefix = "depth_sample_{}".format(stamp_ns)
+        out_dir = self.debug_depth_dump_dir
+        try:
+            raw_npy = os.path.join(out_dir, prefix + "_raw.npy")
+            raw_csv = os.path.join(out_dir, prefix + "_raw.csv")
+            meter_npy = os.path.join(out_dir, prefix + "_meter.npy")
+            meter_csv = os.path.join(out_dir, prefix + "_meter.csv")
+            norm_npy = os.path.join(out_dir, prefix + "_norm.npy")
+            norm_csv = os.path.join(out_dir, prefix + "_norm.csv")
+            meta_json = os.path.join(out_dir, prefix + "_meta.json")
+
+            np.save(raw_npy, raw_depth)
+            np.savetxt(raw_csv, raw_depth, delimiter=",", fmt="%.6f")
+            np.save(meter_npy, depth_m)
+            np.savetxt(meter_csv, depth_m, delimiter=",", fmt="%.6f")
+            np.save(norm_npy, depth_norm)
+            np.savetxt(norm_csv, depth_norm[..., 0], delimiter=",", fmt="%.6f")
+
+            meta = {
+                "prefix": prefix,
+                "max_depth_m": float(self.max_depth_m),
+                "resolution": int(self.resolution),
+                "raw_unit": depth_debug["raw_unit"],
+                "raw_shape": depth_debug["raw_shape"],
+                "norm_shape": depth_debug["norm_shape"],
+                "raw_dtype": depth_debug["raw_dtype"],
+                "norm_dtype": depth_debug["norm_dtype"],
+                "raw_stats": depth_debug["raw_stats"],
+                "depth_m_stats": depth_debug["depth_m_stats"],
+                "norm_stats": depth_debug["norm_stats"],
+            }
+            with open(meta_json, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            self._depth_sample_saved = True
+            rospy.loginfo(
+                "[DBG_DEPTH_DUMP] saved one depth sample to %s (prefix=%s)",
+                out_dir,
+                prefix,
+            )
+        except Exception as e:
+            rospy.logerr_throttle(1.0, "Depth sample dump failed: %s", str(e))
 
     def _build_obs(
         self, depth_msg: Image, polar_msg: PointStamped
@@ -507,6 +578,7 @@ def parse_args():
     p.add_argument("--strict_checkpoint", action="store_true")
     p.add_argument("--debug_mapping", action="store_true")
     p.add_argument("--debug_depth", action="store_true")
+    p.add_argument("--debug_depth_dump_dir", type=str, default="./debug_depth_samples")
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)

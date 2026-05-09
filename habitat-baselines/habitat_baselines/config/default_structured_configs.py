@@ -48,6 +48,14 @@ class EvalConfig(HabitatBaselinesBaseConfig):
         # available options are "disk" and "tensorboard"
         default_factory=list
     )
+    # Debug option: dump one depth observation frame to disk during eval.
+    depth_dump_enabled: bool = False
+    # Output directory for dumped depth files.
+    depth_dump_dir: str = "output/depth_samples"
+    # Optional explicit observation key. If empty, evaluator auto-detects a depth key.
+    depth_dump_obs_key: str = ""
+    # Save csv alongside npy for easier manual inspection.
+    depth_dump_save_csv: bool = True
     extra_sim_sensors: Dict[str, SimulatorSensorConfig] = field(
         default_factory=dict
     )
