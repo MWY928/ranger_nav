@@ -114,7 +114,7 @@ habitat_baselines:
     use_ckpt_config: False 
     should_load_ckpt: True
     depth_dump_enabled: True
-    depth_dump_dir: "evaluation/falcon/hm3d/depth_samples"
+    depth_dump_dir: "test_modules/test_results/sim_depth_samples"
     depth_dump_obs_key: "agent_0_articulated_agent_jaw_depth"
     depth_dump_save_csv: True
     # video_option: ["disk"]

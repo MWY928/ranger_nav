@@ -578,7 +578,7 @@ def parse_args():
     p.add_argument("--strict_checkpoint", action="store_true")
     p.add_argument("--debug_mapping", action="store_true")
     p.add_argument("--debug_depth", action="store_true")
-    p.add_argument("--debug_depth_dump_dir", type=str, default="./debug_depth_samples")
+    p.add_argument("--debug_depth_dump_dir", type=str, default="./test_modules/test_results/bridge_depth_samples")
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)
