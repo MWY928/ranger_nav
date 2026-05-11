@@ -278,7 +278,7 @@ class FalconRosBridge(object):
         debug["depth_m_stats"] = self._depth_stats(depth_m)
         depth_norm = depth_m / self.max_depth_m
         depth_norm = cv2.resize(depth_norm, (self.resolution, self.resolution), interpolation=cv2.INTER_NEAREST)
-        depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1)
+        depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1) #把数组类型统一成 float32，和模型输入定义一致，给二维深度图增加一个“通道维”(H, W, 1)
         debug["norm_shape"] = tuple(depth_norm.shape)
         debug["norm_dtype"] = str(depth_norm.dtype)
         debug["norm_stats"] = self._depth_stats(depth_norm)
