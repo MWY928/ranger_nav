@@ -268,6 +268,14 @@ class FalconRosBridge(object):
         vis_u8 = np.clip(vis * 255.0, 0.0, 255.0).astype(np.uint8)
         return cv2.applyColorMap(vis_u8, cv2.COLORMAP_JET)
 
+    @staticmethod
+    def _center_crop_to_square(arr: np.ndarray) -> np.ndarray:
+        h, w = arr.shape[:2]
+        side = min(h, w)
+        y0 = (h - side) // 2
+        x0 = (w - side) // 2
+        return arr[y0 : y0 + side, x0 : x0 + side]
+
     def _depth_msg_to_norm_depth(
         self, depth_msg: Image
     ) -> Tuple[np.ndarray, Dict[str, object]]:
@@ -281,6 +289,8 @@ class FalconRosBridge(object):
             "raw_unit": "m",
             "raw_stats": None,
             "depth_m_stats": None,
+            "crop_shape": None,
+            "crop_stats": None,
             "norm_shape": None,
             "norm_dtype": None,
             "norm_stats": None,
@@ -306,6 +316,9 @@ class FalconRosBridge(object):
         depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
         depth_m = np.clip(depth_m, 0.0, self.max_depth_m)
         debug["depth_m_stats"] = self._depth_stats(depth_m)
+        depth_m = self._center_crop_to_square(depth_m)
+        debug["crop_shape"] = tuple(depth_m.shape)
+        debug["crop_stats"] = self._depth_stats(depth_m)
         depth_norm = depth_m / self.max_depth_m
         depth_norm = cv2.resize(depth_norm, (self.resolution, self.resolution), interpolation=cv2.INTER_NEAREST)
         depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1) #把数组类型统一成 float32，和模型输入定义一致，给二维深度图增加一个“通道维”(H, W, 1)
@@ -379,11 +392,13 @@ class FalconRosBridge(object):
                 "resolution": int(self.resolution),
                 "raw_unit": depth_debug["raw_unit"],
                 "raw_shape": depth_debug["raw_shape"],
+                "crop_shape": depth_debug["crop_shape"],
                 "norm_shape": depth_debug["norm_shape"],
                 "raw_dtype": depth_debug["raw_dtype"],
                 "norm_dtype": depth_debug["norm_dtype"],
                 "raw_stats": depth_debug["raw_stats"],
                 "depth_m_stats": depth_debug["depth_m_stats"],
+                "crop_stats": depth_debug["crop_stats"],
                 "norm_stats": depth_debug["norm_stats"],
                 "raw_preview_png": raw_png,
                 "meter_preview_png": meter_png,
@@ -500,6 +515,7 @@ class FalconRosBridge(object):
         if self.debug_depth:
             rospy.loginfo(
                 "[DBG_DEPTH] ros(enc={}, raw={} {}, unit={}) raw_stats=[{}] depth_m_stats=[{}] "
+                "crop(shape={}, stats=[{}]) "
                 "falcon_expected(shape=({}, {}, 1), dtype=float32, norm=[0,1]) falcon_input(actual={} {}) norm_stats=[{}]".format(
                     depth_debug["encoding"],
                     depth_debug["raw_shape"],
@@ -507,6 +523,8 @@ class FalconRosBridge(object):
                     depth_debug["raw_unit"],
                     self._fmt_stats(depth_debug["raw_stats"]),
                     self._fmt_stats(depth_debug["depth_m_stats"]),
+                    depth_debug["crop_shape"],
+                    self._fmt_stats(depth_debug["crop_stats"]),
                     self.resolution,
                     self.resolution,
                     depth_debug["norm_shape"],
