@@ -24,7 +24,6 @@ class RealsenseRosNode(object):
         return msg
     def __init__(self):
         rospy.init_node("realsense_rgbd_node", anonymous=False)
-
         # -----------------------------
         # ROS params
         # -----------------------------
@@ -97,8 +96,7 @@ class RealsenseRosNode(object):
         self.config = rs.config()
         self.config.enable_device(self.serial)
 
-        # 这里按你原脚本的 L500 配置方式设置
-        # 若不是 L500，也给一个通用保守配置
+        #check if camera is l500 series or not for res config
         if product_line == "L500":
             depth_w, depth_h, depth_fps = 640, 480, min(self.prefer_fps, 30)
             color_w, color_h, color_fps = 1280, 720, min(self.prefer_fps, 30)
@@ -127,7 +125,6 @@ class RealsenseRosNode(object):
     def _prepare_camera_info(self):
         """
         构造 CameraInfo。
-        如果深度对齐到彩色图，则深度也使用彩色相机内参。
         """
         frames = self.pipeline.wait_for_frames()
         if self.align is not None:
@@ -233,7 +230,6 @@ class RealsenseRosNode(object):
         # -----------------------------
         # Depth image
         # 发布原始 z16 深度，单位通常是相机原始深度单位（常见为毫米尺度对应的uint16）
-        # 这样最兼容 ROS 生态
         # -----------------------------
         depth_raw = np.asanyarray(depth_frame.get_data()).copy()  # uint16
         depth_msg = self.numpy_to_image_msg(depth_raw, "16UC1", self.depth_frame_id)

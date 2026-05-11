@@ -241,8 +241,9 @@ class FalconRosBridge(object):
     def _depth_msg_to_norm_depth(
         self, depth_msg: Image
     ) -> Tuple[np.ndarray, Dict[str, object]]:
-        # Accept either millimeter uint16 depth or meter float32 depth, then
-        # normalize to [0, 1] and resize to policy resolution.
+        # process and normalize the depth info
+
+        #info for depth debug
         debug = {
             "encoding": depth_msg.encoding,
             "raw_shape": None,
@@ -297,9 +298,11 @@ class FalconRosBridge(object):
         depth_norm: np.ndarray,
         depth_debug: Dict[str, object],
     ):
+        """dump a frame of depth info to files for debug"""
         if not self.debug_depth or self._depth_sample_saved:
             return
 
+    
         stamp_ns = int(rospy.Time.now().to_nsec())
         prefix = "depth_sample_{}".format(stamp_ns)
         out_dir = self.debug_depth_dump_dir
@@ -319,6 +322,7 @@ class FalconRosBridge(object):
             np.save(norm_npy, depth_norm)
             np.savetxt(norm_csv, depth_norm[..., 0], delimiter=",", fmt="%.6f")
 
+            
             meta = {
                 "prefix": prefix,
                 "max_depth_m": float(self.max_depth_m),
