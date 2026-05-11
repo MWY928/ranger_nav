@@ -1,0 +1,44 @@
+{
+  "prefix": "depth_sample_1778489385738380193",
+  "max_depth_m": 10.0,
+  "resolution": 256,
+  "raw_unit": "mm",
+  "raw_shape": [
+    720,
+    1280
+  ],
+  "norm_shape": [
+    256,
+    256,
+    1
+  ],
+  "raw_dtype": "uint16",
+  "norm_dtype": "float32",
+  "raw_stats": {
+    "valid_ratio": 1.0,
+    "min": 0.0,
+    "max": 24840.0,
+    "mean": 11198.8154296875,
+    "p50": 12790.0,
+    "p95": 24390.0,
+    "zero_ratio": 0.435458984375
+  },
+  "depth_m_stats": {
+    "valid_ratio": 1.0,
+    "min": 0.0,
+    "max": 10.0,
+    "mean": 5.6447672843933105,
+    "p50": 10.0,
+    "p95": 10.0,
+    "zero_ratio": 0.435458984375
+  },
+  "norm_stats": {
+    "valid_ratio": 1.0,
+    "min": 0.0,
+    "max": 1.0,
+    "mean": 0.5643815994262695,
+    "p50": 1.0,
+    "p95": 1.0,
+    "zero_ratio": 0.435546875
+  }
+}
