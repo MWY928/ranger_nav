@@ -238,6 +238,36 @@ class FalconRosBridge(object):
             "zero_ratio": float(np.mean(valid == 0.0)),
         }
 
+    @staticmethod
+    def _make_depth_preview(
+        arr: np.ndarray, clip_max: Optional[float] = None
+    ) -> np.ndarray:
+        arr_f = arr.astype(np.float32, copy=False)
+        if arr_f.ndim == 3 and arr_f.shape[-1] == 1:
+            arr_f = arr_f[..., 0]
+
+        finite = np.isfinite(arr_f)
+        positive = finite & (arr_f > 0.0)
+        if np.any(positive):
+            valid = arr_f[positive]
+        elif np.any(finite):
+            valid = arr_f[finite]
+        else:
+            valid = np.array([0.0], dtype=np.float32)
+
+        lo = float(np.min(valid))
+        hi = float(np.percentile(valid, 99))
+        if clip_max is not None:
+            hi = min(hi, float(clip_max))
+        if hi <= lo:
+            hi = lo + 1e-6
+
+        vis = np.clip(arr_f, lo, hi)
+        vis = (vis - lo) / (hi - lo)
+        vis = np.nan_to_num(vis, nan=0.0, posinf=1.0, neginf=0.0)
+        vis_u8 = np.clip(vis * 255.0, 0.0, 255.0).astype(np.uint8)
+        return cv2.applyColorMap(vis_u8, cv2.COLORMAP_JET)
+
     def _depth_msg_to_norm_depth(
         self, depth_msg: Image
     ) -> Tuple[np.ndarray, Dict[str, object]]:
@@ -313,6 +343,9 @@ class FalconRosBridge(object):
             meter_csv = os.path.join(out_dir, prefix + "_meter.csv")
             norm_npy = os.path.join(out_dir, prefix + "_norm.npy")
             norm_csv = os.path.join(out_dir, prefix + "_norm.csv")
+            raw_png = os.path.join(out_dir, prefix + "_raw_preview.png")
+            meter_png = os.path.join(out_dir, prefix + "_meter_preview.png")
+            norm_png = os.path.join(out_dir, prefix + "_norm_preview.png")
             meta_json = os.path.join(out_dir, prefix + "_meta.json")
 
             np.save(raw_npy, raw_depth)
@@ -321,6 +354,23 @@ class FalconRosBridge(object):
             np.savetxt(meter_csv, depth_m, delimiter=",", fmt="%.6f")
             np.save(norm_npy, depth_norm)
             np.savetxt(norm_csv, depth_norm[..., 0], delimiter=",", fmt="%.6f")
+            cv2.imwrite(
+                raw_png,
+                self._make_depth_preview(
+                    raw_depth,
+                    clip_max=self.max_depth_m * 1000.0
+                    if depth_debug["raw_unit"] == "mm"
+                    else self.max_depth_m,
+                ),
+            )
+            cv2.imwrite(
+                meter_png,
+                self._make_depth_preview(depth_m, clip_max=self.max_depth_m),
+            )
+            cv2.imwrite(
+                norm_png,
+                self._make_depth_preview(depth_norm, clip_max=1.0),
+            )
 
             
             meta = {
@@ -335,13 +385,16 @@ class FalconRosBridge(object):
                 "raw_stats": depth_debug["raw_stats"],
                 "depth_m_stats": depth_debug["depth_m_stats"],
                 "norm_stats": depth_debug["norm_stats"],
+                "raw_preview_png": raw_png,
+                "meter_preview_png": meter_png,
+                "norm_preview_png": norm_png,
             }
             with open(meta_json, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
             self._depth_sample_saved = True
             rospy.loginfo(
-                "[DBG_DEPTH_DUMP] saved one depth sample to %s (prefix=%s)",
+                "[DBG_DEPTH_DUMP] saved one depth sample to %s (prefix=%s, previews=raw/meter/norm png)",
                 out_dir,
                 prefix,
             )
