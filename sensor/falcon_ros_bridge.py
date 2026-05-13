@@ -276,6 +276,12 @@ class FalconRosBridge(object):
         x0 = (w - side) // 2
         return arr[y0 : y0 + side, x0 : x0 + side]
 
+    @staticmethod
+    def _replace_zero_depth_with_ten(arr: np.ndarray) -> np.ndarray:
+        out = arr.copy()
+        out[out == 0.0] = 10.0
+        return out
+
     def _depth_msg_to_norm_depth(
         self, depth_msg: Image
     ) -> Tuple[np.ndarray, Dict[str, object]]:
@@ -315,6 +321,7 @@ class FalconRosBridge(object):
 
         depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
         depth_m = np.clip(depth_m, 0.0, self.max_depth_m)
+        depth_m = self._replace_zero_depth_with_ten(depth_m)
         debug["depth_m_stats"] = self._depth_stats(depth_m)
         depth_m = self._center_crop_to_square(depth_m)
         debug["crop_shape"] = tuple(depth_m.shape)
