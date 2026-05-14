@@ -23,8 +23,8 @@ def parse_args():
     p.add_argument("--rate", type=float, default=20.0)
 
     p.add_argument("--mode", type=str, default="fixed", choices=["fixed", "sweep"])
-    p.add_argument("--r", type=float, default=1.5, help="Fixed/sweep center distance (m)")
-    p.add_argument("--theta", type=float, default=0.0, help="Fixed heading (rad)")
+    p.add_argument("--r", type=float, default=2, help="Fixed/sweep center distance (m)")
+    p.add_argument("--theta", type=float, default=3.14, help="Fixed heading (rad)")
     p.add_argument("--tag_id", type=float, default=999.0)
 
     p.add_argument("--sweep_amp", type=float, default=0.5, help="Sweep amplitude (rad)")

@@ -7,7 +7,7 @@ import numpy as np
 # =========================
 # 1. 读取 CSV 深度数据
 # =========================
-csv_path = Path(r"D:\depth_output\depth_logs\step50.csv")
+csv_path = Path(r"D:\depth_output\depth_logs\step70.csv")
 #csv_path = Path(r"test_modules\test_results\bridge_depth_samples\depth_sample_1778491004401717424_meter.csv")
 
 # 读取二维深度矩阵
