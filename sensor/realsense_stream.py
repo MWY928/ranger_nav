@@ -49,6 +49,7 @@ class RealsenseRosNode(object):
         self.config = None
         self.profile = None
         self.align = None
+        self.depth_scale_m = None
 
         self.color_pub = rospy.Publisher(self.color_topic, Image, queue_size=10)
         self.depth_pub = rospy.Publisher(self.depth_topic, Image, queue_size=10)
@@ -108,6 +109,7 @@ class RealsenseRosNode(object):
         self.config.enable_stream(rs.stream.color, color_w, color_h, rs.format.bgr8, color_fps)
 
         self.profile = self.pipeline.start(self.config)
+        self._cache_depth_scale()
 
         if self.enable_align_to_color:
             self.align = rs.align(rs.stream.color)
@@ -121,6 +123,15 @@ class RealsenseRosNode(object):
             self.pipeline.wait_for_frames()
 
         self._prepare_camera_info()
+
+    def _cache_depth_scale(self):
+        depth_sensor = self.profile.get_device().first_depth_sensor()
+        self.depth_scale_m = float(depth_sensor.get_depth_scale())
+        rospy.loginfo(
+            "RealSense depth scale = %.9f m/unit (%.6f mm/unit)",
+            self.depth_scale_m,
+            self.depth_scale_m * 1000.0,
+        )
 
     def _prepare_camera_info(self):
         """
@@ -231,8 +242,10 @@ class RealsenseRosNode(object):
         # Depth image
         # 发布原始 z16 深度，单位通常是相机原始深度单位（常见为毫米尺度对应的uint16）
         # -----------------------------
-        depth_raw = np.asanyarray(depth_frame.get_data()).copy()  # uint16
-        depth_msg = self.numpy_to_image_msg(depth_raw, "16UC1", self.depth_frame_id)
+        depth_raw = np.asanyarray(depth_frame.get_data()).astype(np.float32)
+        depth_mm = np.rint(depth_raw * self.depth_scale_m * 1000.0)
+        depth_mm = np.clip(depth_mm, 0, np.iinfo(np.uint16).max).astype(np.uint16)
+        depth_msg = self.numpy_to_image_msg(depth_mm, "16UC1", self.depth_frame_id)
 
         # -----------------------------
         # CameraInfo

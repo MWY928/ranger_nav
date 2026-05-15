@@ -150,7 +150,7 @@ class SimplePolarGoalTracker(object):
         #   x: right
         #   z: forward
         #
-        # Use cmd_vel-compatible sign:
+        # cmd_vel-compatible:
         #   theta > 0: tag left
         #   theta < 0: tag right
         r = math.sqrt(px * px + pz * pz)
