@@ -13,6 +13,6 @@ fi
 python "$SCRIPT_DIR/fake_polar_goal_pub.py" \
   --topic /tag_polar \
   --mode fixed \
-  --r 1.5 \
+  --r 3.0 \
   --theta 0.0 \
   --rate 20
