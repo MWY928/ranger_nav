@@ -1,0 +1,60 @@
+{
+  "prefix": "depth_sample_1779073758660084486",
+  "max_depth_m": 10.0,
+  "resolution": 256,
+  "raw_unit": "mm",
+  "raw_shape": [
+    720,
+    1280
+  ],
+  "crop_shape": [
+    720,
+    720
+  ],
+  "norm_shape": [
+    256,
+    256,
+    1
+  ],
+  "raw_dtype": "uint16",
+  "norm_dtype": "float32",
+  "raw_stats": {
+    "valid_ratio": 1.0,
+    "min": 0.0,
+    "max": 5882.0,
+    "mean": 1337.14501953125,
+    "p50": 0.0,
+    "p95": 5515.0,
+    "zero_ratio": 0.6040907118055555
+  },
+  "depth_m_stats": {
+    "valid_ratio": 1.0,
+    "min": 1.340000033378601,
+    "max": 10.0,
+    "mean": 7.378051280975342,
+    "p50": 10.0,
+    "p95": 10.0,
+    "zero_ratio": 0.0
+  },
+  "crop_stats": {
+    "valid_ratio": 1.0,
+    "min": 1.590000033378601,
+    "max": 10.0,
+    "mean": 6.003018856048584,
+    "p50": 5.392000198364258,
+    "p95": 10.0,
+    "zero_ratio": 0.0
+  },
+  "norm_stats": {
+    "valid_ratio": 1.0,
+    "min": 0.1599000096321106,
+    "max": 1.0,
+    "mean": 0.6009113192558289,
+    "p50": 0.5403000116348267,
+    "p95": 1.0,
+    "zero_ratio": 0.0
+  },
+  "raw_preview_png": "/home/mobile/ranger_nav/test_modules/test_results/bridge_depth_samples/depth_sample_1779073758660084486_raw_preview.png",
+  "meter_preview_png": "/home/mobile/ranger_nav/test_modules/test_results/bridge_depth_samples/depth_sample_1779073758660084486_meter_preview.png",
+  "norm_preview_png": "/home/mobile/ranger_nav/test_modules/test_results/bridge_depth_samples/depth_sample_1779073758660084486_norm_preview.png"
+}
