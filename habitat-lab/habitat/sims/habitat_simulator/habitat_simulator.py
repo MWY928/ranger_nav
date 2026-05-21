@@ -179,6 +179,21 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
         if isinstance(obs, np.ndarray):
             obs = np.clip(obs, self.min_depth_value, self.max_depth_value)
 
+            # Optional depth noise injection.
+            # Comment out this whole block to disable noise and recover original behavior.
+            try:
+                from noise_test.depth_noise import add_realistic_depth_noise
+
+                obs = add_realistic_depth_noise(
+                    obs,
+                    max_depth=self.max_depth_value,
+                )
+                # Keep depth in the valid range before normalization.
+                obs = np.clip(obs, self.min_depth_value, self.max_depth_value)
+            except Exception:
+                # Keep simulator robust if optional noise module is unavailable.
+                pass
+
             obs = np.expand_dims(
                 obs, axis=2
             )  # make depth observation a 3D array

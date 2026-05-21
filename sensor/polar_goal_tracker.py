@@ -51,15 +51,23 @@ class SimplePolarGoalTracker(object):
         self.target_tag_id = int(rospy.get_param("~target_tag_id", 0))
         self.use_first_detection = bool(rospy.get_param("~use_first_detection", False))
 
-        # Angle correction
+        # Angle correction / deadband switches.
+        # Disabled by default to stay close to simulator pointgoal behavior.
+        self.enable_theta_offset = bool(
+            rospy.get_param("~enable_theta_offset", False)
+        )
+        self.enable_theta_deadband = bool(
+            rospy.get_param("~enable_theta_deadband", False)
+        )
+
         # New convention:
         #   theta_raw = -atan2(px, pz)
         #
         # If old front angle was -0.1037 rad,
         # new front angle is +0.1037 rad,
-        # so set theta_offset_rad = +0.1037.
+        # so set theta_offset_rad = +0.1037 and enable_theta_offset:=true.
         self.theta_offset_rad = float(rospy.get_param("~theta_offset_rad", 0.0))
-        self.theta_deadband_rad = float(rospy.get_param("~theta_deadband_rad", 0.03))
+        self.theta_deadband_rad = float(rospy.get_param("~theta_deadband_rad", 0.0))
 
         # Fallback behavior
         self.lost_timeout_sec = float(rospy.get_param("~lost_timeout_sec", 0.30))
@@ -109,7 +117,9 @@ class SimplePolarGoalTracker(object):
         rospy.loginfo("detections_topic: %s", self.detections_topic)
         rospy.loginfo("odom_topic:       %s", self.odom_topic)
         rospy.loginfo("output_topic:     %s", self.output_topic)
+        rospy.loginfo("enable_theta_offset: %s", self.enable_theta_offset)
         rospy.loginfo("theta_offset_rad: %.4f", self.theta_offset_rad)
+        rospy.loginfo("enable_theta_deadband: %s", self.enable_theta_deadband)
         rospy.loginfo("theta_deadband_rad: %.4f", self.theta_deadband_rad)
         rospy.loginfo("alpha: %.3f", self.alpha)
 
@@ -155,8 +165,13 @@ class SimplePolarGoalTracker(object):
         #   theta < 0: tag right
         r = math.sqrt(px * px + pz * pz)
         theta_raw = -math.atan2(px, pz)
-        theta = wrap_angle(theta_raw - self.theta_offset_rad)
-        theta = self.apply_deadband(theta)
+        if self.enable_theta_offset:
+            theta = wrap_angle(theta_raw - self.theta_offset_rad)
+        else:
+            theta = wrap_angle(theta_raw)
+
+        if self.enable_theta_deadband:
+            theta = self.apply_deadband(theta)
 
         now = rospy.Time.now()
         self.last_detection_time = now
@@ -198,7 +213,8 @@ class SimplePolarGoalTracker(object):
 
         r = math.sqrt(dx * dx + dy * dy)
         theta = wrap_angle(math.atan2(dy, dx) - self.robot_yaw)
-        theta = self.apply_deadband(theta)
+        if self.enable_theta_deadband:
+            theta = self.apply_deadband(theta)
 
         return r, theta
 

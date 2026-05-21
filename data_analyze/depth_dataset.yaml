@@ -1,0 +1,16 @@
+# depth_dataset.yaml
+
+sim:
+  - data_analyze\sim_depth\step0.csv
+  - data_analyze\sim_depth\step10.csv
+  - data_analyze/sim_depth/step30.csv
+  - data_analyze\sim_depth\step20.csv
+  - data_analyze\sim_depth\step40.csv
+  - data_analyze\sim_depth\step50.csv
+  - data_analyze\sim_depth\step60.csv
+  - data_analyze\sim_depth\step70.csv
+  - data_analyze\sim_depth\2\*.csv
+
+real:
+  - test_modules\test_results_meter_256\bridge_depth_samples\*.npy
+  
