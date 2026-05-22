@@ -152,7 +152,7 @@ class FALCONEvaluator(Evaluator):
         observations = envs.post_step(observations)
         self._dump_depth_sample_once(observations, config)
         batch = batch_obs(observations, device=device)
-        batch = apply_obs_transforms_batch(batch, obs_transforms)  # type: ignore
+        batch = apply_obs_transforms_batch(batch, obs_transforms)  
 
         action_shape, discrete_actions = get_action_space_info(
             agent.actor_critic.policy_action_space

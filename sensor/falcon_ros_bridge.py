@@ -46,6 +46,7 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
     Accept different checkpoint layouts and return state_dict keys
     compatible with PointNavResNetPolicy.
     """
+    # 训练脚本保存 checkpoint 的层级可能不同，这里统一整理成 policy 可加载的 key。
     src = ckpt_obj.get("state_dict", ckpt_obj)
     if not isinstance(src, dict):
         raise RuntimeError("Unsupported checkpoint format: state_dict is not a dict.")
@@ -69,11 +70,13 @@ class FalconRosBridge(object):
     """Bridge ROS sensor streams to Falcon policy and publish cmd_vel."""
 
     def __init__(self, args):
+        # 初始化 ROS 节点和推理设备。
         rospy.init_node("falcon_ros_bridge", anonymous=False)
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         rospy.loginfo("Falcon device: %s", str(self.device))
 
+        # 保存运行参数：输入分辨率、深度范围、推理模式和调试开关。
         self.resolution = args.resolution
         self.max_depth_m = args.max_depth_m
         self.deterministic = args.deterministic
@@ -84,15 +87,18 @@ class FalconRosBridge(object):
         self._depth_sample_saved = False
 
         # Policy obs keys should match your social_nav_v2 config.
+        # 这些 key 必须和训练 Falcon/PointNav 模型时的 observation space 的key一致。
         self.depth_key = args.depth_obs_key
         self.goal_key = args.goal_obs_key
 
+        # 缓存最近的极坐标目标消息，用于和深度图按时间戳对齐。
         self.latest_polar_msg = None
         self.polar_buffer = deque(maxlen=max(10, args.polar_buffer_size))
         self.last_obs_time = rospy.Time(0)
         self.data_timeout_sec = args.data_timeout_sec
         self.max_polar_age_sec = args.max_polar_age_sec
 
+        # 构建策略网络并加载训练好的 checkpoint。
         self.actor_critic = self._build_policy(
             checkpoint_path=args.checkpoint,
             hidden_size=args.hidden_size,
@@ -102,6 +108,7 @@ class FalconRosBridge(object):
         )
         self.actor_critic.eval()
 
+        # RNN/LSTM 策略需要跨帧保存 hidden state、上一帧动作和 episode mask。
         self.hidden_states = torch.zeros(
             1,
             self.actor_critic.net.num_recurrent_layers,
@@ -111,14 +118,17 @@ class FalconRosBridge(object):
         self.not_done_masks = torch.zeros(1, 1, dtype=torch.bool, device=self.device)
         self.prev_actions = torch.zeros(1, 1, dtype=torch.long, device=self.device)
 
+        # ROS 发布器：cmd_vel 控制机器人，debug_obs_topic 用作推理心跳。
         self.cmd_pub = rospy.Publisher(args.cmd_vel_topic, Twist, queue_size=10)
         self.debug_obs_pub = rospy.Publisher(args.debug_obs_topic, Header, queue_size=10)
 
+        # ROS 订阅器：极坐标目标和深度图。
         self.polar_sub = rospy.Subscriber(
             args.polar_topic, PointStamped, self._polar_cb, queue_size=20
         )
         self.depth_sub = rospy.Subscriber(args.depth_topic, Image, self._cb_depth, queue_size=10)
 
+        # Falcon 输出 Discrete(4)，这里映射成 ROS Twist 速度指令。
         self.action_to_cmd = {
             0: (0.0, 0.0),  # stop
             1: (args.forward_speed, 0.0),  # forward
@@ -133,6 +143,7 @@ class FalconRosBridge(object):
         rospy.loginfo("Falcon ROS bridge started.")
         rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
         rospy.loginfo("Publish:   %s", args.cmd_vel_topic)
+        # Watchdog 定时检查输入是否超时，超时就发布停车命令。
         self.watchdog = rospy.Timer(rospy.Duration(0.05), self._watchdog_cb)
 
     def _build_policy(
@@ -144,6 +155,7 @@ class FalconRosBridge(object):
         rnn_type: str,
     ):
         # Build observation/action spaces that match the training setup.
+        # 这里不连接真实 gym 环境，只构造 policy 初始化所需的空间描述。
         spaces = {
             self.goal_key: Box(
                 low=np.finfo(np.float32).min,
@@ -172,6 +184,7 @@ class FalconRosBridge(object):
             normalize_visual_inputs=False,
         ).to(self.device)
 
+        # 加载 checkpoint，并允许非严格匹配，方便兼容不同训练保存格式。
         ckpt = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
         ckpt = ckpt[0]["state_dict"]
         policy_sd = _extract_actor_critic_state_dict(ckpt)
@@ -198,10 +211,12 @@ class FalconRosBridge(object):
             row_bytes = msg.width * 4
             raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
             arr = raw[:, :row_bytes].copy().view(np.float32).reshape(msg.height, msg.width)
-        elif msg.encoding in ("rgb8", "bgr8"):
-            row_bytes = msg.width * 3
-            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
-            arr = raw[:, :row_bytes].copy().reshape(msg.height, msg.width, 3)
+            print("notice the output depth type is 32FC1")
+        # elif msg.encoding in ("rgb8", "bgr8"):
+        #     row_bytes = msg.width * 3
+        #     raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
+        #     arr = raw[:, :row_bytes].copy().reshape(msg.height, msg.width, 3)
+        #     print("notice the input th color img now")
         else:
             raise ValueError("Unsupported image encoding: {}".format(msg.encoding))
 
@@ -211,6 +226,7 @@ class FalconRosBridge(object):
 
     @staticmethod
     def _depth_stats(arr: np.ndarray) -> Dict[str, float]:
+        # 为调试日志统计深度数组的有效比例、范围、分位数和 0 值比例。
         arr_f = arr.astype(np.float32, copy=False)
         finite = np.isfinite(arr_f)
         valid = arr_f[finite]
@@ -240,6 +256,7 @@ class FalconRosBridge(object):
     def _make_depth_preview(
         arr: np.ndarray, clip_max: Optional[float] = None
     ) -> np.ndarray:
+        # 把深度数组归一化并上色，方便保存成 png 直观看输入质量。
         arr_f = arr.astype(np.float32, copy=False)
         if arr_f.ndim == 3 and arr_f.shape[-1] == 1:
             arr_f = arr_f[..., 0]
@@ -268,6 +285,7 @@ class FalconRosBridge(object):
 
     @staticmethod
     def _center_crop_to_square(arr: np.ndarray) -> np.ndarray:
+        # Falcon 训练时使用方形输入，这里从中心裁成正方形再缩放。
         h, w = arr.shape[:2]
         side = min(h, w)
         y0 = (h - side) // 2
@@ -276,6 +294,7 @@ class FalconRosBridge(object):
 
     @staticmethod
     def _replace_zero_depth_with_ten(arr: np.ndarray) -> np.ndarray:
+        # 某些相机用 0 表示无效深度，这里当作远距离处理，避免被误认为障碍物。
         out = arr.copy()
         out[out == 0.0] = 10.0
         return out
@@ -283,9 +302,9 @@ class FalconRosBridge(object):
     def _depth_msg_to_norm_depth(
         self, depth_msg: Image
     ) -> Tuple[np.ndarray, Dict[str, object]]:
-        # process and normalize the depth info
+        # 将 ROS Image 深度消息转换成 Falcon 需要的 [H, W, 1] float32 归一化输入。
 
-        #info for depth debug
+        # debug 字典记录每一步的形状、类型和统计信息，供日志和 dump 文件使用。
         debug = {
             "encoding": depth_msg.encoding,
             "raw_shape": None,
@@ -300,6 +319,7 @@ class FalconRosBridge(object):
             "norm_stats": None,
         }
 
+        # 16UC1 通常是毫米；其他深度输入按当前相机流约定转成米。
         if depth_msg.encoding == "16UC1":
             depth_u16 = self._ros_image_to_numpy(depth_msg)
             raw_depth = depth_u16
@@ -317,16 +337,19 @@ class FalconRosBridge(object):
             debug["raw_stats"] = self._depth_stats(depth_f32)
             depth_m = depth_f32.astype(np.float32)*0.001
 
+        # 清理 NaN/Inf，裁剪到最大深度，并把无效 0 深度替换成远距离值。
         depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
         depth_m = np.clip(depth_m, 0.0, self.max_depth_m)
         depth_m = self._replace_zero_depth_with_ten(depth_m)
         debug["depth_m_stats"] = self._depth_stats(depth_m)
+        # 中心裁剪成方形，缩放到 policy 训练分辨率，再归一化到 [0, 1]。
         depth_m = self._center_crop_to_square(depth_m)
         debug["crop_shape"] = tuple(depth_m.shape)
         debug["crop_stats"] = self._depth_stats(depth_m)
         depth_norm = depth_m / self.max_depth_m
         depth_norm = cv2.resize(depth_norm, (self.resolution, self.resolution), interpolation=cv2.INTER_NEAREST)
-        depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1) #把数组类型统一成 float32，和模型输入定义一致，给二维深度图增加一个“通道维”(H, W, 1)
+        # 统一成 float32，并给二维深度图增加通道维，得到模型期望的 (H, W, 1)。
+        depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1)
         debug["norm_shape"] = tuple(depth_norm.shape)
         debug["norm_dtype"] = str(depth_norm.dtype)
         debug["norm_stats"] = self._depth_stats(depth_norm)
@@ -347,6 +370,7 @@ class FalconRosBridge(object):
         depth_debug: Dict[str, object],
     ):
         """dump a frame of depth info to files for debug"""
+        # 只保存第一帧，避免调试模式下持续写入大量深度文件。
         if not self.debug_depth or self._depth_sample_saved:
             return
 
@@ -366,6 +390,7 @@ class FalconRosBridge(object):
             norm_png = os.path.join(out_dir, prefix + "_norm_preview.png")
             meta_json = os.path.join(out_dir, prefix + "_meta.json")
 
+            # 同时保存 npy/csv 原始数值和 png 预览图，便于离线检查深度处理链路。
             np.save(raw_npy, raw_depth)
             np.savetxt(raw_csv, raw_depth, delimiter=",", fmt="%.6f")
             np.save(meter_npy, depth_m)
@@ -425,6 +450,7 @@ class FalconRosBridge(object):
         self, depth_msg: Image, polar_msg: PointStamped
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, object]]:
         # Polar convention from sensor/polar_distance.py: x=r, y=theta.
+        # 将极坐标目标和深度图打包成 Falcon policy 一次推理需要的 observation。
         r = np.float32(polar_msg.point.x)
         theta = np.float32(float(polar_msg.point.y))
         depth_norm, depth_debug = self._depth_msg_to_norm_depth(depth_msg)
@@ -468,9 +494,10 @@ class FalconRosBridge(object):
                 probs = distribution.probs[0].detach().cpu().numpy()
 
         return int(actions[0][0].item()), probs
-    # 放到 FalconRosBridge 类里，例如 _infer_action 后面
+
     @staticmethod
     def _fmt_stats(stats: Dict[str, float]) -> str:
+        # 将深度统计结果格式化成一行日志文本。
         return (
             "valid={:.1f}% min={:.3f} max={:.3f} mean={:.3f} p50={:.3f} p95={:.3f} zero={:.1f}%".format(
                 100.0 * stats["valid_ratio"],
@@ -484,6 +511,7 @@ class FalconRosBridge(object):
         )
 
     def _fmt_action_probs(self, probs: Optional[np.ndarray]) -> str:
+        # 将 categorical action 概率转成人类可读的动作名和概率。
         if probs is None:
             return "N/A(non-categorical)"
         labels = ["stop", "forward", "left", "right"]
@@ -501,6 +529,7 @@ class FalconRosBridge(object):
         probs: Optional[np.ndarray],
         depth_debug: Dict[str, object],
     ):
+        # 打印一次推理的关键输入、输出和深度处理统计，用于检查映射是否正确。
         g = obs[self.goal_key]
         d = obs[self.depth_key]
         lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
@@ -546,10 +575,12 @@ class FalconRosBridge(object):
         self.cmd_pub.publish(tw)
 
     def _publish_stop(self):
+        # 发布全 0 Twist，作为缺输入、异常和 watchdog 超时的安全停车动作。
         tw = Twist()
         self.cmd_pub.publish(tw)
 
     def _polar_cb(self, polar_msg: PointStamped):
+        # 极坐标目标回调只负责缓存，真正推理由深度图回调驱动。
         self.latest_polar_msg = polar_msg
         self.polar_buffer.append(polar_msg)
 
@@ -607,6 +638,7 @@ class FalconRosBridge(object):
             rospy.logerr_throttle(1.0, "Falcon ROS bridge callback failed: %s", str(e))
 
     def _cb_depth(self, depth_msg: Image):
+        # 每收到一帧深度图，就尝试用时间上最近的目标消息进行一次控制推理。
         self._process_one(depth_msg=depth_msg)
 
     def _watchdog_cb(self, _event):
@@ -623,6 +655,7 @@ class FalconRosBridge(object):
 
 
 def parse_args():
+    # 命令行参数用于适配不同 topic、模型结构、速度标定和调试需求。
     p = argparse.ArgumentParser(description="ROS Depth+Polar -> Falcon -> cmd_vel bridge")
     p.add_argument("--checkpoint", type=str, required=True)
     # Backward-compatibility flags kept for old launch scripts.
