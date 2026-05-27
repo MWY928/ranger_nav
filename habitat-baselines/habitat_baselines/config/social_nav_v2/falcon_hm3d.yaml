@@ -171,7 +171,7 @@ habitat_baselines:
       # The PyTorch distributed backend to use
       distrib_backend: NCCL
       # Visual encoder backbone
-      pretrained_weights: pretrained_model/pretrained_habitat3.pth
+      pretrained_weights: weights/pretrained_habitat3.pth
       # Initialize with pretrained weights
       pretrained: True # For finetune
       # Initialize just the visual encoder backbone with pretrained weights

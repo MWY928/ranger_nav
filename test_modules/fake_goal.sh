@@ -14,5 +14,5 @@ python "$SCRIPT_DIR/fake_polar_goal_pub.py" \
   --topic /tag_polar \
   --mode fixed \
   --r 2.0 \
-  --theta 0.8 \
+  --theta -1.0 \
   --rate 20

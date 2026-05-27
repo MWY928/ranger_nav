@@ -14,5 +14,5 @@ python "$SCRIPT_DIR/fake_depth_pub.py" \
   --topic /camera/aligned_depth_to_color/image_raw \
   --encoding 16UC1 \
   --mode fixed \
-  --depth_m 0.2 \
+  --depth_m 10 \
   --rate 20
