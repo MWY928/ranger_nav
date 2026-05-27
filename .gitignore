@@ -22,7 +22,6 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
-*.pth
 
 # Hydra
 outputs/
@@ -114,6 +113,9 @@ evaluation/
 
 debug/
 pretrained_model/
+*.pth
+*.pt
+*.ckpt
 watch_json_gz.ipynb
 input/
 input_test/
@@ -127,4 +129,4 @@ habitat-lab/habitat/config/habitat/dataset/pointnav/hm3d_fin.yaml
 data/
 output_test/
 docs/
-res/*.pth
+res/

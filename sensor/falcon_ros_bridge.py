@@ -192,8 +192,9 @@ class FalconRosBridge(object):
         ).to(self.device)
 
         # 加载 checkpoint，并允许非严格匹配，方便兼容不同训练保存格式。
-        ckpt = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
-        ckpt = ckpt[0]["state_dict"]
+        ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        if isinstance(ckpt, (list, tuple)) and len(ckpt) > 0 and isinstance(ckpt[0], dict):
+            ckpt = ckpt[0].get("state_dict", ckpt[0])
         policy_sd = _extract_actor_critic_state_dict(ckpt)
         missing, unexpected = policy.load_state_dict(policy_sd, strict=False)
 
