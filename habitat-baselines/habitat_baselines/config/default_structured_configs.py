@@ -56,6 +56,21 @@ class EvalConfig(HabitatBaselinesBaseConfig):
     depth_dump_obs_key: str = ""
     # Save csv alongside npy for easier manual inspection.
     depth_dump_save_csv: bool = True
+    # Debug option: replace simulator observations with real bridge dump samples.
+    real_obs_replay_enabled: bool = False
+    # Directory or one json/npz file produced by falcon_ros_bridge --replay_dump_enabled.
+    real_obs_replay_path: str = "test_modules/test_results/bridge_policy_replay"
+    # Observation keys to replace. Empty means evaluator auto-detects the depth key.
+    real_obs_replay_depth_key: str = ""
+    real_obs_replay_goal_key: str = "agent_0_pointgoal_with_gps_compass"
+    # "normalized" uses saved [0, 1] depth; "meter" normalizes saved meter depth here.
+    real_obs_replay_depth_unit: str = "normalized"
+    real_obs_replay_min_depth_m: float = 0.0
+    real_obs_replay_max_depth_m: float = 10.0
+    # If true, reuse samples from the beginning after the sequence ends.
+    real_obs_replay_loop: bool = False
+    # Output path for simulator actions under real observation replay.
+    real_obs_replay_action_output: str = "output/real_obs_replay_actions.json"
     extra_sim_sensors: Dict[str, SimulatorSensorConfig] = field(
         default_factory=dict
     )

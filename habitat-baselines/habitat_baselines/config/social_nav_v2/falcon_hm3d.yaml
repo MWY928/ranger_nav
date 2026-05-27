@@ -95,7 +95,7 @@ habitat_baselines:
   tensorboard_dir: "evaluation/falcon/hm3d/tb"
   video_dir: "evaluation/falcon/hm3d/video"
   test_episode_count: -1
-  eval_ckpt_path_dir: "pretrained_model/falcon_noaux_25.pth"
+  eval_ckpt_path_dir: "weights/falcon_noaux_25.pth"
   num_environments: 8
   checkpoint_folder: "evaluation/falcon/hm3d/checkpoints"
   num_updates: -1
@@ -117,6 +117,15 @@ habitat_baselines:
     depth_dump_dir: "test_modules/test_results/sim_depth_samples"
     depth_dump_obs_key: "agent_0_articulated_agent_jaw_depth"
     depth_dump_save_csv: True
+    real_obs_replay_enabled: False
+    real_obs_replay_path: "test_modules/test_results/bridge_policy_replay"
+    real_obs_replay_depth_key: "agent_0_articulated_agent_jaw_depth"
+    real_obs_replay_goal_key: "agent_0_pointgoal_with_gps_compass"
+    real_obs_replay_depth_unit: "normalized"
+    real_obs_replay_min_depth_m: 0.0
+    real_obs_replay_max_depth_m: 10.0
+    real_obs_replay_loop: False
+    real_obs_replay_action_output: "output/real_obs_replay_actions.json"
     # video_option: ["disk"]
 
   rl:

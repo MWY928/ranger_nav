@@ -470,7 +470,7 @@ class FalconRosBridge(object):
 
     def _infer_action(
         self, obs: Dict[str, np.ndarray]
-    ) -> Tuple[int, Optional[np.ndarray], float, Dict[str, np.ndarray]]:
+    ) -> Tuple[int, Optional[np.ndarray], Dict[str, np.ndarray]]:
         # Recurrent policy inference:
         # hidden_states/prev_actions/not_done_masks are carried across timesteps.
         batch = batch_obs([obs], device=self.device)
@@ -497,7 +497,6 @@ class FalconRosBridge(object):
             else:
                 actions = distribution.sample()
 
-            value = self.actor_critic.critic(features)
             self.hidden_states = next_hidden_states
             self.not_done_masks.fill_(True)
             self.prev_actions.copy_(actions)
@@ -506,7 +505,7 @@ class FalconRosBridge(object):
             if self.actor_critic.action_distribution_type == "categorical":
                 probs = distribution.probs[0].detach().cpu().numpy()
 
-        return int(actions[0][0].item()), probs, float(value[0][0].item()), recurrent_input
+        return int(actions[0][0].item()), probs, recurrent_input
 
     @staticmethod
     def _fmt_stats(stats: Dict[str, float]) -> str:
@@ -540,7 +539,6 @@ class FalconRosBridge(object):
         act_id: int,
         theta_in: float,
         probs: Optional[np.ndarray],
-        value: float,
         depth_debug: Dict[str, object],
     ):
         # 打印一次推理的关键输入、输出和深度处理统计，用于检查映射是否正确。
@@ -571,10 +569,10 @@ class FalconRosBridge(object):
 
         rospy.loginfo(
             "[DBG_ACT] goal[r,theta]=[{:.3f}, {:.3f}] input_theta={:.3f}(pass-through) depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
-            "act_id={} cmd=({:.3f},{:.3f}) value={:.3f} probs=[{}]".format(
+            "act_id={} cmd=({:.3f},{:.3f}) probs=[{}]".format(
                 float(g[0]), float(g[1]), float(theta_in),
                 tuple(d.shape), float(d.min()), float(d.max()),
-                int(act_id), float(lin), float(ang), float(value),
+                int(act_id), float(lin), float(ang),
                 self._fmt_action_probs(probs),
             )
         )
@@ -584,7 +582,6 @@ class FalconRosBridge(object):
         obs: Dict[str, np.ndarray],
         act_id: int,
         probs: Optional[np.ndarray],
-        value: float,
         recurrent_input: Dict[str, np.ndarray],
         depth_debug: Dict[str, object],
         depth_msg: Image,
@@ -605,13 +602,13 @@ class FalconRosBridge(object):
             np.savez_compressed(
                 npz_path,
                 depth=obs[self.depth_key],
+                depth_meter=obs[self.depth_key] * np.float32(self.max_depth_m),
                 goal=obs[self.goal_key],
                 hidden_in=recurrent_input["hidden_in"],
                 prev_action_in=recurrent_input["prev_action_in"],
                 not_done_mask_in=recurrent_input["not_done_mask_in"],
                 action=np.array([act_id], dtype=np.int64),
                 probs=np.array([] if probs is None else probs, dtype=np.float32),
-                value=np.array([value], dtype=np.float32),
             )
             meta = {
                 "prefix": prefix,
@@ -625,7 +622,6 @@ class FalconRosBridge(object):
                 "cmd_linear_x": float(lin),
                 "cmd_angular_z": float(ang),
                 "action_probs": None if probs is None else probs.tolist(),
-                "critic_value": float(value),
                 "depth_msg_stamp": depth_msg.header.stamp.to_sec(),
                 "polar_msg_stamp": polar_msg.header.stamp.to_sec(),
                 "polar_r": float(polar_msg.point.x),
@@ -701,14 +697,13 @@ class FalconRosBridge(object):
         try:
             theta_in = float(polar_msg.point.y)
             obs, depth_debug = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
-            act_id, probs, value, recurrent_input = self._infer_action(obs)
+            act_id, probs, recurrent_input = self._infer_action(obs)
             if self.debug_mapping or self.debug_depth:
-                self._debug_print_once(obs, act_id, theta_in, probs, value, depth_debug)
+                self._debug_print_once(obs, act_id, theta_in, probs, depth_debug)
             self._maybe_dump_replay_sample(
                 obs=obs,
                 act_id=act_id,
                 probs=probs,
-                value=value,
                 recurrent_input=recurrent_input,
                 depth_debug=depth_debug,
                 depth_msg=depth_msg,

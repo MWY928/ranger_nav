@@ -1,5 +1,6 @@
 import os
 import time
+import glob
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
@@ -133,6 +134,192 @@ class FALCONEvaluator(Evaluator):
             f"[DepthDump] Saved one depth sample: key={key}, npy={raw_npy}, meta={meta_json}"
         )
 
+    @staticmethod
+    def _resolve_real_obs_replay_files(path: str) -> List[str]:
+        if os.path.isdir(path):
+            files = sorted(glob.glob(os.path.join(path, "bridge_policy_replay_*.json")))
+            if len(files) == 0:
+                files = sorted(glob.glob(os.path.join(path, "*.npz")))
+            return files
+        return [path]
+
+    def _load_real_obs_replay_samples(self, config) -> None:
+        self._real_obs_replay_samples = []
+        self._real_obs_replay_step = 0
+        self._real_obs_replay_last = None
+        if not config.habitat_baselines.eval.real_obs_replay_enabled:
+            return
+
+        files = self._resolve_real_obs_replay_files(
+            config.habitat_baselines.eval.real_obs_replay_path
+        )
+        if len(files) == 0:
+            raise RuntimeError(
+                "real_obs_replay_enabled=True but no replay samples found in {}".format(
+                    config.habitat_baselines.eval.real_obs_replay_path
+                )
+            )
+
+        for sample_file in files:
+            meta = {}
+            npz_path = sample_file
+            if sample_file.endswith(".json"):
+                with open(sample_file, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                npz_path = meta["obs_npz"]
+
+            data = np.load(npz_path)
+            self._real_obs_replay_samples.append(
+                {
+                    "path": sample_file,
+                    "meta": meta,
+                    "depth": data["depth"].astype(np.float32)
+                    if "depth" in data
+                    else None,
+                    "depth_meter": data["depth_meter"].astype(np.float32)
+                    if "depth_meter" in data
+                    else None,
+                    "goal": data["goal"].astype(np.float32),
+                    "bridge_action": int(data["action"][0])
+                    if "action" in data
+                    else meta.get("action_id"),
+                    "bridge_probs": data["probs"].astype(np.float32).tolist()
+                    if "probs" in data and data["probs"].size > 0
+                    else meta.get("action_probs"),
+                    "bridge_value": float(data["value"][0])
+                    if "value" in data
+                    else meta.get("critic_value"),
+                }
+            )
+
+        logger.info(
+            "[RealObsReplay] Loaded {} real observation samples from {}".format(
+                len(self._real_obs_replay_samples),
+                config.habitat_baselines.eval.real_obs_replay_path,
+            )
+        )
+
+    def _real_obs_replay_depth(self, sample: Dict[str, Any], config) -> np.ndarray:
+        unit = config.habitat_baselines.eval.real_obs_replay_depth_unit
+        if unit == "meter":
+            depth_m = sample["depth_meter"]
+            if depth_m is None:
+                if sample["depth"] is None:
+                    raise RuntimeError("Replay sample has no depth array.")
+                depth_m = sample["depth"] * float(
+                    config.habitat_baselines.eval.real_obs_replay_max_depth_m
+                )
+            min_d = float(config.habitat_baselines.eval.real_obs_replay_min_depth_m)
+            max_d = float(config.habitat_baselines.eval.real_obs_replay_max_depth_m)
+            depth = np.clip(depth_m, min_d, max_d)
+            depth = (depth - min_d) / (max_d - min_d)
+            return depth.astype(np.float32)
+        if unit == "normalized":
+            if sample["depth"] is None:
+                raise RuntimeError("Replay sample has no normalized depth array.")
+            return sample["depth"].astype(np.float32)
+        raise RuntimeError("Unsupported real_obs_replay_depth_unit: {}".format(unit))
+
+    def _apply_real_obs_replay(self, observations, config):
+        if not config.habitat_baselines.eval.real_obs_replay_enabled:
+            return observations
+        if len(self._real_obs_replay_samples) == 0:
+            return observations
+
+        idx = self._real_obs_replay_step
+        if idx >= len(self._real_obs_replay_samples):
+            if config.habitat_baselines.eval.real_obs_replay_loop:
+                idx = idx % len(self._real_obs_replay_samples)
+            else:
+                idx = len(self._real_obs_replay_samples) - 1
+        sample = self._real_obs_replay_samples[idx]
+        self._real_obs_replay_last = {"sample_index": int(idx), "sample": sample}
+
+        depth_key = config.habitat_baselines.eval.real_obs_replay_depth_key
+        if not depth_key:
+            depth_key = self._select_depth_key(observations[0], config)
+        goal_key = config.habitat_baselines.eval.real_obs_replay_goal_key
+
+        real_depth = self._real_obs_replay_depth(sample, config)
+        real_goal = sample["goal"].astype(np.float32)
+
+        for obs in observations:
+            if depth_key is not None and depth_key in obs:
+                obs[depth_key] = real_depth.copy()
+            if goal_key and goal_key in obs:
+                obs[goal_key] = real_goal.copy()
+
+        self._real_obs_replay_step += 1
+        logger.info(
+            "[RealObsReplay] step={} sample={} depth_key={} goal_key={} "
+            "goal=[{:.3f}, {:.3f}] depth[min,max]=[{:.3f}, {:.3f}]".format(
+                self._real_obs_replay_step,
+                sample["path"],
+                depth_key,
+                goal_key,
+                float(real_goal[0]),
+                float(real_goal[1]),
+                float(np.min(real_depth)),
+                float(np.max(real_depth)),
+            )
+        )
+        return observations
+
+    @staticmethod
+    def _action_to_jsonable(action_value) -> Dict[str, Any]:
+        arr = np.asarray(action_value)
+        return {
+            "type": "array",
+            "value": arr.tolist(),
+            "scalar": int(arr.reshape(-1)[0]) if arr.size > 0 else None,
+        }
+
+    def _record_real_obs_replay_actions(
+        self,
+        records: List[Dict[str, Any]],
+        current_episodes_info,
+        step_data,
+    ) -> None:
+        if self._real_obs_replay_last is None:
+            return
+        sample = self._real_obs_replay_last["sample"]
+        sample_index = self._real_obs_replay_last["sample_index"]
+        bridge_action = sample.get("bridge_action")
+
+        for env_i, action_value in enumerate(step_data):
+            action_json = self._action_to_jsonable(action_value)
+            records.append(
+                {
+                    "step": int(self._real_obs_replay_step),
+                    "env_index": int(env_i),
+                    "scene_id": current_episodes_info[env_i].scene_id,
+                    "episode_id": current_episodes_info[env_i].episode_id,
+                    "sample_index": int(sample_index),
+                    "sample_path": sample["path"],
+                    "goal": sample["goal"].astype(np.float32).tolist(),
+                    "bridge_action": bridge_action,
+                    "bridge_probs": sample.get("bridge_probs"),
+                    "bridge_value": sample.get("bridge_value"),
+                    "sim_action": action_json,
+                    "action_match": None
+                    if bridge_action is None or action_json["scalar"] is None
+                    else int(bridge_action) == int(action_json["scalar"]),
+                }
+            )
+
+    def _write_real_obs_replay_action_records(self, records, config) -> None:
+        if not config.habitat_baselines.eval.real_obs_replay_enabled:
+            return
+        out_path = config.habitat_baselines.eval.real_obs_replay_action_output
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=2, ensure_ascii=False)
+        logger.info(
+            "[RealObsReplay] Saved {} action comparison records to {}".format(
+                len(records), out_path
+            )
+        )
+
     def evaluate_agent(
         self,
         agent,
@@ -147,9 +334,11 @@ class FALCONEvaluator(Evaluator):
         rank0_keys,
     ):
         self._depth_sample_dumped = False
+        self._load_real_obs_replay_samples(config)
         success_cal = 0 ## my added
         observations = envs.reset()
         observations = envs.post_step(observations)
+        observations = self._apply_real_obs_replay(observations, config)
         self._dump_depth_sample_once(observations, config)
         batch = batch_obs(observations, device=device)
         batch = apply_obs_transforms_batch(batch, obs_transforms)  
@@ -226,6 +415,7 @@ class FALCONEvaluator(Evaluator):
 
         pbar = tqdm.tqdm(total=number_of_eval_episodes * evals_per_ep)
         actions_record = defaultdict(list)
+        real_obs_replay_action_records = []
         agent.eval()
         while (
             len(stats_episodes) < (number_of_eval_episodes * evals_per_ep)
@@ -277,6 +467,12 @@ class FALCONEvaluator(Evaluator):
             else:
                 step_data = [a.item() for a in action_data.env_actions.cpu()]
 
+            self._record_real_obs_replay_actions(
+                real_obs_replay_action_records,
+                current_episodes_info,
+                step_data,
+            )
+
             outputs = envs.step(step_data)
 
             observations, rewards_l, dones, infos = [
@@ -316,6 +512,7 @@ class FALCONEvaluator(Evaluator):
                 infos[i].update(policy_infos[i])
 
             observations = envs.post_step(observations)
+            observations = self._apply_real_obs_replay(observations, config)
             batch = batch_obs(  # type: ignore
                 observations,
                 device=device,
@@ -501,3 +698,8 @@ class FALCONEvaluator(Evaluator):
         }
         with open(actions_output_path, "w") as f:
             json.dump(serializable_actions, f, indent=2)
+
+        self._write_real_obs_replay_action_records(
+            real_obs_replay_action_records,
+            config,
+        )
