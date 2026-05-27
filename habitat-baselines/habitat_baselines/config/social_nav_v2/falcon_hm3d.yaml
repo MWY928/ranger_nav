@@ -118,6 +118,7 @@ habitat_baselines:
     depth_dump_obs_key: "agent_0_articulated_agent_jaw_depth"
     depth_dump_save_csv: True
     real_obs_replay_enabled: False
+    real_obs_replay_source: "file"
     real_obs_replay_path: "test_modules/test_results/bridge_policy_replay"
     real_obs_replay_depth_key: "agent_0_articulated_agent_jaw_depth"
     real_obs_replay_goal_key: "agent_0_pointgoal_with_gps_compass"
@@ -125,6 +126,9 @@ habitat_baselines:
     real_obs_replay_min_depth_m: 0.0
     real_obs_replay_max_depth_m: 10.0
     real_obs_replay_loop: False
+    real_obs_replay_synthetic_depth_m: 10.0
+    real_obs_replay_synthetic_goal_r: 4.0
+    real_obs_replay_synthetic_goal_theta: 0.0
     real_obs_replay_action_output: "output/real_obs_replay_actions.json"
     # video_option: ["disk"]
 

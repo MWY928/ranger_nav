@@ -58,6 +58,8 @@ class EvalConfig(HabitatBaselinesBaseConfig):
     depth_dump_save_csv: bool = True
     # Debug option: replace simulator observations with real bridge dump samples.
     real_obs_replay_enabled: bool = False
+    # "file" reads bridge dumps; "synthetic" uses constant depth/goal for smoke tests.
+    real_obs_replay_source: str = "file"
     # Directory or one json/npz file produced by falcon_ros_bridge --replay_dump_enabled.
     real_obs_replay_path: str = "test_modules/test_results/bridge_policy_replay"
     # Observation keys to replace. Empty means evaluator auto-detects the depth key.
@@ -69,6 +71,10 @@ class EvalConfig(HabitatBaselinesBaseConfig):
     real_obs_replay_max_depth_m: float = 10.0
     # If true, reuse samples from the beginning after the sequence ends.
     real_obs_replay_loop: bool = False
+    # Synthetic replay settings. Depth is in meters before normalization.
+    real_obs_replay_synthetic_depth_m: float = 10.0
+    real_obs_replay_synthetic_goal_r: float = 4.0
+    real_obs_replay_synthetic_goal_theta: float = 0.0
     # Output path for simulator actions under real observation replay.
     real_obs_replay_action_output: str = "output/real_obs_replay_actions.json"
     extra_sim_sensors: Dict[str, SimulatorSensorConfig] = field(

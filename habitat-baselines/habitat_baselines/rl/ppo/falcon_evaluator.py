@@ -149,6 +149,15 @@ class FALCONEvaluator(Evaluator):
         self._real_obs_replay_last = None
         if not config.habitat_baselines.eval.real_obs_replay_enabled:
             return
+        if config.habitat_baselines.eval.real_obs_replay_source == "synthetic":
+            logger.info("[RealObsReplay] Using synthetic constant depth/goal samples.")
+            return
+        if config.habitat_baselines.eval.real_obs_replay_source != "file":
+            raise RuntimeError(
+                "Unsupported real_obs_replay_source: {}".format(
+                    config.habitat_baselines.eval.real_obs_replay_source
+                )
+            )
 
         files = self._resolve_real_obs_replay_files(
             config.habitat_baselines.eval.real_obs_replay_path
@@ -223,16 +232,19 @@ class FALCONEvaluator(Evaluator):
     def _apply_real_obs_replay(self, observations, config):
         if not config.habitat_baselines.eval.real_obs_replay_enabled:
             return observations
-        if len(self._real_obs_replay_samples) == 0:
+        if config.habitat_baselines.eval.real_obs_replay_source == "synthetic":
+            sample = self._make_synthetic_real_obs_sample(observations, config)
+            idx = self._real_obs_replay_step
+        elif len(self._real_obs_replay_samples) == 0:
             return observations
-
-        idx = self._real_obs_replay_step
-        if idx >= len(self._real_obs_replay_samples):
-            if config.habitat_baselines.eval.real_obs_replay_loop:
-                idx = idx % len(self._real_obs_replay_samples)
-            else:
-                idx = len(self._real_obs_replay_samples) - 1
-        sample = self._real_obs_replay_samples[idx]
+        else:
+            idx = self._real_obs_replay_step
+            if idx >= len(self._real_obs_replay_samples):
+                if config.habitat_baselines.eval.real_obs_replay_loop:
+                    idx = idx % len(self._real_obs_replay_samples)
+                else:
+                    idx = len(self._real_obs_replay_samples) - 1
+            sample = self._real_obs_replay_samples[idx]
         self._real_obs_replay_last = {"sample_index": int(idx), "sample": sample}
 
         depth_key = config.habitat_baselines.eval.real_obs_replay_depth_key
@@ -264,6 +276,38 @@ class FALCONEvaluator(Evaluator):
             )
         )
         return observations
+
+    def _make_synthetic_real_obs_sample(self, observations, config) -> Dict[str, Any]:
+        depth_key = config.habitat_baselines.eval.real_obs_replay_depth_key
+        if not depth_key:
+            depth_key = self._select_depth_key(observations[0], config)
+        if depth_key is None or depth_key not in observations[0]:
+            raise RuntimeError("Cannot create synthetic replay depth: no depth key found.")
+
+        depth_shape = observations[0][depth_key].shape
+        min_d = float(config.habitat_baselines.eval.real_obs_replay_min_depth_m)
+        max_d = float(config.habitat_baselines.eval.real_obs_replay_max_depth_m)
+        depth_m_value = float(config.habitat_baselines.eval.real_obs_replay_synthetic_depth_m)
+        depth_norm_value = (np.clip(depth_m_value, min_d, max_d) - min_d) / (max_d - min_d)
+        depth = np.full(depth_shape, depth_norm_value, dtype=np.float32)
+        depth_meter = np.full(depth_shape, depth_m_value, dtype=np.float32)
+        goal = np.array(
+            [
+                float(config.habitat_baselines.eval.real_obs_replay_synthetic_goal_r),
+                float(config.habitat_baselines.eval.real_obs_replay_synthetic_goal_theta),
+            ],
+            dtype=np.float32,
+        )
+        return {
+            "path": "synthetic_constant",
+            "meta": {},
+            "depth": depth,
+            "depth_meter": depth_meter,
+            "goal": goal,
+            "bridge_action": None,
+            "bridge_probs": None,
+            "bridge_value": None,
+        }
 
     @staticmethod
     def _action_to_jsonable(action_value) -> Dict[str, Any]:
