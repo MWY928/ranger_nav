@@ -66,6 +66,22 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
     return out
 
 
+def _select_agent0_checkpoint_state_dict(ckpt_obj):
+    """Return the policy state_dict from common single-agent or multi-agent ckpt layouts."""
+    if isinstance(ckpt_obj, (list, tuple)) and len(ckpt_obj) > 0 and isinstance(ckpt_obj[0], dict):
+        return ckpt_obj[0].get("state_dict", ckpt_obj[0])
+
+    if isinstance(ckpt_obj, dict):
+        if 0 in ckpt_obj and isinstance(ckpt_obj[0], dict):
+            return ckpt_obj[0].get("state_dict", ckpt_obj[0])
+        if "0" in ckpt_obj and isinstance(ckpt_obj["0"], dict):
+            return ckpt_obj["0"].get("state_dict", ckpt_obj["0"])
+        if "state_dict" in ckpt_obj:
+            return ckpt_obj["state_dict"]
+
+    return ckpt_obj
+
+
 class FalconRosBridge(object):
     """Bridge ROS sensor streams to Falcon policy and publish cmd_vel."""
 
@@ -193,8 +209,7 @@ class FalconRosBridge(object):
 
         # 加载 checkpoint，并允许非严格匹配，方便兼容不同训练保存格式。
         ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        if isinstance(ckpt, (list, tuple)) and len(ckpt) > 0 and isinstance(ckpt[0], dict):
-            ckpt = ckpt[0].get("state_dict", ckpt[0])
+        ckpt = _select_agent0_checkpoint_state_dict(ckpt)
         policy_sd = _extract_actor_critic_state_dict(ckpt)
         missing, unexpected = policy.load_state_dict(policy_sd, strict=False)
 
