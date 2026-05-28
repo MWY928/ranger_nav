@@ -19,6 +19,7 @@ from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_batch,
 )
 from habitat_baselines.rl.ppo.evaluator import Evaluator, pause_envs
+from habitat_baselines.rl.multi_agent.utils import update_dict_with_agent_prefix
 from habitat_baselines.utils.common import (
     batch_obs,
     generate_video,
@@ -323,15 +324,20 @@ class FALCONEvaluator(Evaluator):
         records: List[Dict[str, Any]],
         current_episodes_info,
         step_data,
+        sim_probs: Optional[List[List[float]]] = None,
     ) -> None:
         if self._real_obs_replay_last is None:
             return
         sample = self._real_obs_replay_last["sample"]
         sample_index = self._real_obs_replay_last["sample_index"]
-        bridge_action = sample.get("bridge_action")
 
         for env_i, action_value in enumerate(step_data):
             action_json = self._action_to_jsonable(action_value)
+            env_sim_probs = (
+                sim_probs[env_i]
+                if sim_probs is not None and env_i < len(sim_probs)
+                else None
+            )
             records.append(
                 {
                     "step": int(self._real_obs_replay_step),
@@ -341,14 +347,15 @@ class FALCONEvaluator(Evaluator):
                     "sample_index": int(sample_index),
                     "sample_path": sample["path"],
                     "goal": sample["goal"].astype(np.float32).tolist(),
-                    "bridge_action": bridge_action,
-                    "bridge_probs": sample.get("bridge_probs"),
-                    "bridge_value": sample.get("bridge_value"),
                     "sim_action": action_json,
-                    "action_match": None
-                    if bridge_action is None or action_json["scalar"] is None
-                    else int(bridge_action) == int(action_json["scalar"]),
+                    "sim_probs": env_sim_probs,
                 }
+            )
+            print(
+                "[SimAct] step={} env={} action={} probs={}".format(
+                    self._real_obs_replay_step, env_i, action_json["scalar"], env_sim_probs
+                ),
+                flush=True,
             )
 
     def _write_real_obs_replay_action_records(self, records, config) -> None:
@@ -363,6 +370,41 @@ class FALCONEvaluator(Evaluator):
                 len(records), out_path
             )
         )
+
+    def _compute_agent0_action_probs(
+        self,
+        agent,
+        batch,
+        recurrent_hidden_states,
+        prev_actions,
+        masks,
+        hidden_state_lens,
+        action_space_lens,
+    ) -> Optional[List[List[float]]]:
+        try:
+            if hasattr(agent, "_agents"):
+                policy = agent._agents[0].actor_critic
+                obs = update_dict_with_agent_prefix(batch, 0)
+                hidden = recurrent_hidden_states[..., : hidden_state_lens[0]]
+                prev = prev_actions[..., : action_space_lens[0]]
+                mask = masks[..., :1]
+            else:
+                policy = agent.actor_critic
+                obs = batch
+                hidden = recurrent_hidden_states
+                prev = prev_actions
+                mask = masks
+
+            if getattr(policy, "action_distribution_type", None) != "categorical":
+                return None
+
+            with torch.no_grad():
+                features, _, _ = policy.net(obs, hidden, prev, mask)
+                distribution = policy.action_distribution(features)
+                return distribution.probs.detach().cpu().numpy().tolist()
+        except Exception as e:
+            logger.warn("[RealObsReplay] Failed to compute sim action probs: {}".format(e))
+            return None
 
     def evaluate_agent(
         self,
@@ -474,6 +516,17 @@ class FALCONEvaluator(Evaluator):
                     "index_len_recurrent_hidden_states": hidden_state_lens,
                     "index_len_prev_actions": action_space_lens,
                 }
+            sim_action_probs = None
+            if config.habitat_baselines.eval.real_obs_replay_enabled:
+                sim_action_probs = self._compute_agent0_action_probs(
+                    agent,
+                    batch,
+                    test_recurrent_hidden_states,
+                    prev_actions,
+                    not_done_masks,
+                    hidden_state_lens,
+                    action_space_lens,
+                )
             with inference_mode():
                 action_data = agent.actor_critic.act(
                     batch,
@@ -515,6 +568,7 @@ class FALCONEvaluator(Evaluator):
                 real_obs_replay_action_records,
                 current_episodes_info,
                 step_data,
+                sim_action_probs,
             )
 
             outputs = envs.step(step_data)
