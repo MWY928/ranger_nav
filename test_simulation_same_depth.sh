@@ -24,6 +24,8 @@ python -m habitat_baselines.run \
   --config-name social_nav_v2/falcon_hm3d \
   habitat_baselines.eval_ckpt_path_dir=weights/ours_hm3d_val_best.pth \
   habitat_baselines.num_environments=1 \
+  habitat_baselines.test_episode_count=1 \
+  habitat.environment.max_episode_steps=20 \
   habitat_baselines.eval.real_obs_replay_enabled=True \
   habitat_baselines.eval.real_obs_replay_source=synthetic \
   habitat_baselines.eval.real_obs_replay_synthetic_depth_m=10.0 \
