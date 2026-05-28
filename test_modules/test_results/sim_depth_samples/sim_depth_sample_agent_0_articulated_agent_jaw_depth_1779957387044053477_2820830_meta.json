@@ -1,0 +1,20 @@
+{
+  "obs_key": "agent_0_articulated_agent_jaw_depth",
+  "shape": [
+    256,
+    256,
+    1
+  ],
+  "dtype": "float32",
+  "stats": {
+    "valid_ratio": 1.0,
+    "min": 1.0,
+    "max": 1.0,
+    "mean": 1.0,
+    "p50": 1.0,
+    "p95": 1.0,
+    "zero_ratio": 0.0
+  },
+  "raw_npy": "test_modules/test_results/sim_depth_samples/sim_depth_sample_agent_0_articulated_agent_jaw_depth_1779957387044053477_2820830_raw.npy",
+  "raw_csv": "test_modules/test_results/sim_depth_samples/sim_depth_sample_agent_0_articulated_agent_jaw_depth_1779957387044053477_2820830_raw.csv"
+}
