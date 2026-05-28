@@ -18,10 +18,30 @@
 
 set -e
 
-CHECKPOINT="weights/ours_hm3d_val_best.pth"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
+RESULTS_DIR="$REPO_ROOT/test_modules/test_results"
+CHECKPOINT="$REPO_ROOT/weights/ours_hm3d_val_best.pth"
 REPLAY_DUMP_LIMIT=60
+REPLAY_DUMP_ROOT="$RESULTS_DIR/bridge_policy_replay"
+RUN_ID="${1:-$(date +%Y%m%d_%H%M%S)}"
+REPLAY_DUMP_DIR="${REPLAY_DUMP_ROOT}/${RUN_ID}"
+DEBUG_DEPTH_DUMP_DIR="$RESULTS_DIR/bridge_depth_samples"
 
-rosrun ranger_nav falcon_ros_bridge.py \
+mkdir -p "$REPLAY_DUMP_DIR"
+mkdir -p "$DEBUG_DEPTH_DUMP_DIR"
+echo "Recording replay samples to: $REPLAY_DUMP_DIR"
+echo "Recording depth debug samples to: $DEBUG_DEPTH_DUMP_DIR"
+echo "Replay dump limit: $REPLAY_DUMP_LIMIT"
+
+exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$CHECKPOINT" \
+  --depth_topic /camera/aligned_depth_to_color/image_raw \
+  --polar_topic /tag_polar \
+  --cmd_vel_topic /cmd_vel \
+  --debug_mapping \
+  --debug_depth \
+  --debug_depth_dump_dir "$DEBUG_DEPTH_DUMP_DIR" \
   --replay_dump_enabled \
+  --replay_dump_dir "$REPLAY_DUMP_DIR" \
   --replay_dump_limit "$REPLAY_DUMP_LIMIT"
