@@ -55,14 +55,21 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
     for k, v in src.items():
         if not isinstance(k, str):
             continue
+        if not torch.is_tensor(v):
+            continue
         if "actor_critic." in k:
             kk = k.split("actor_critic.", 1)[1]
             out[kk] = v
         elif k.startswith("net.") or k.startswith("action_distribution.") or k.startswith("critic."):
             out[k] = v
     if len(out) == 0:
-        # Fallback: assume keys are already policy keys.
-        out = src
+        out = {
+            k: v
+            for k, v in src.items()
+            if isinstance(k, str) and torch.is_tensor(v)
+        }
+    if len(out) == 0:
+        raise RuntimeError("No string-key tensor parameters found in checkpoint.")
     return out
 
 
@@ -105,6 +112,7 @@ class FalconRosBridge(object):
         self.replay_dump_dir = args.replay_dump_dir
         self.replay_dump_limit = args.replay_dump_limit
         self._replay_dump_count = 0
+        self._replay_dump_limit_reached = False
 
         # Policy obs keys should match your social_nav_v2 config.
         # 这些 key 必须和训练 Falcon/PointNav 模型时的 observation space 的key一致。
@@ -602,11 +610,12 @@ class FalconRosBridge(object):
         depth_debug: Dict[str, object],
         depth_msg: Image,
         polar_msg: PointStamped,
-    ):
+    ) -> bool:
         if not self.replay_dump_enabled:
-            return
+            return False
         if self.replay_dump_limit >= 0 and self._replay_dump_count >= self.replay_dump_limit:
-            return
+            self._replay_dump_limit_reached = True
+            return True
 
         stamp_ns = int(rospy.Time.now().to_nsec())
         prefix = "bridge_policy_replay_{}".format(stamp_ns)
@@ -648,8 +657,12 @@ class FalconRosBridge(object):
                 json.dump(meta, f, ensure_ascii=False, indent=2)
             self._replay_dump_count += 1
             rospy.loginfo("[REPLAY_DUMP] saved %s", meta_path)
+            if self.replay_dump_limit >= 0 and self._replay_dump_count >= self.replay_dump_limit:
+                self._replay_dump_limit_reached = True
+                return True
         except Exception as e:
             rospy.logerr_throttle(1.0, "Policy replay dump failed: %s", str(e))
+        return False
 
 
     def _publish_cmd(self, action_id: int):
@@ -716,7 +729,7 @@ class FalconRosBridge(object):
             act_id, probs, recurrent_input = self._infer_action(obs)
             if self.debug_mapping or self.debug_depth:
                 self._debug_print_once(obs, act_id, theta_in, probs, depth_debug)
-            self._maybe_dump_replay_sample(
+            replay_limit_reached = self._maybe_dump_replay_sample(
                 obs=obs,
                 act_id=act_id,
                 probs=probs,
@@ -725,6 +738,16 @@ class FalconRosBridge(object):
                 depth_msg=depth_msg,
                 polar_msg=polar_msg,
             )
+            if replay_limit_reached:
+                self._publish_stop()
+                self.last_obs_time = rospy.Time.now()
+                self._emit_heartbeat()
+                rospy.loginfo(
+                    "[REPLAY_DUMP] reached limit %d, stopping bridge.",
+                    self.replay_dump_limit,
+                )
+                rospy.signal_shutdown("Replay dump limit reached.")
+                return
             self._publish_cmd(act_id)
             self.last_obs_time = rospy.Time.now()
             self._emit_heartbeat()
