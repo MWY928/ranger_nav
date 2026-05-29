@@ -1,0 +1,77 @@
+{
+  "prefix": "bridge_policy_replay_1779978859223965406",
+  "obs_npz": "/home/mobile/ranger_nav/test_modules/test_results/bridge_policy_replay/20260528_103415/bridge_policy_replay_1779978859223965406.npz",
+  "depth_key": "articulated_agent_jaw_depth",
+  "goal_key": "pointgoal_with_gps_compass",
+  "resolution": 256,
+  "max_depth_m": 10.0,
+  "deterministic": false,
+  "action_id": 3,
+  "cmd_linear_x": 0.0,
+  "cmd_angular_z": -0.3,
+  "action_probs": [
+    1.9894559090405384e-12,
+    5.241917460807599e-05,
+    3.98601550841704e-05,
+    0.9999077320098877
+  ],
+  "depth_msg_stamp": 1779978858.562403,
+  "polar_msg_stamp": 1779978858.5751114,
+  "polar_r": 2.3242367653911584,
+  "polar_theta": -0.1807399874042643,
+  "depth_debug": {
+    "encoding": "16UC1",
+    "raw_shape": [
+      720,
+      1280
+    ],
+    "raw_dtype": "uint16",
+    "raw_unit": "mm",
+    "raw_stats": {
+      "valid_ratio": 1.0,
+      "min": 0.0,
+      "max": 5519.0,
+      "mean": 2692.419189453125,
+      "p50": 2324.0,
+      "p95": 5270.0,
+      "zero_ratio": 0.27969618055555556
+    },
+    "depth_m_stats": {
+      "valid_ratio": 1.0,
+      "min": 1.0480000972747803,
+      "max": 10.0,
+      "mean": 5.489379405975342,
+      "p50": 4.892000198364258,
+      "p95": 10.0,
+      "zero_ratio": 0.0
+    },
+    "crop_shape": [
+      720,
+      720
+    ],
+    "crop_stats": {
+      "valid_ratio": 1.0,
+      "min": 1.1720000505447388,
+      "max": 10.0,
+      "mean": 4.813262939453125,
+      "p50": 4.924000263214111,
+      "p95": 10.0,
+      "zero_ratio": 0.0
+    },
+    "norm_shape": [
+      256,
+      256,
+      1
+    ],
+    "norm_dtype": "float32",
+    "norm_stats": {
+      "valid_ratio": 1.0,
+      "min": 0.11860001087188721,
+      "max": 1.0,
+      "mean": 0.4827956557273865,
+      "p50": 0.4926000237464905,
+      "p95": 1.0,
+      "zero_ratio": 0.0
+    }
+  }
+}
