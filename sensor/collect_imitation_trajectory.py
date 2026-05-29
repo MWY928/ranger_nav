@@ -479,8 +479,8 @@ def parse_args():
 
     parser.add_argument("--forward_speed", type=float, default=0.3)
     parser.add_argument("--turn_speed", type=float, default=0.3)
-    parser.add_argument("--target_distance", type=float, default=1.0)
-    parser.add_argument("--turn_angle_thresh", type=float, default=0.35)
+    parser.add_argument("--target_distance", type=float, default=0.6)
+    parser.add_argument("--turn_angle_thresh", type=float, default=0.3)
     parser.add_argument("--dist_deadband", type=float, default=0.03)
 
     parser.add_argument("--max_cmd_age_sec", type=float, default=0.5)
