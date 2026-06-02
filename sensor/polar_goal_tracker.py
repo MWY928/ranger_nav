@@ -68,6 +68,7 @@ class SimplePolarGoalTracker(object):
         # so set theta_offset_rad = +0.1037 and enable_theta_offset:=true.
         self.theta_offset_rad = float(rospy.get_param("~theta_offset_rad", 0.0))
         self.theta_deadband_rad = float(rospy.get_param("~theta_deadband_rad", 0.0))
+        self.target_dist_offset=float(rospy.get_param("~distance_offset", 0.2)) #so the robot doesn't hit the target
 
         # Fallback behavior
         self.lost_timeout_sec = float(rospy.get_param("~lost_timeout_sec", 0.30))
@@ -164,6 +165,7 @@ class SimplePolarGoalTracker(object):
         #   theta > 0: tag left
         #   theta < 0: tag right
         r = math.sqrt(px * px + pz * pz)
+        r=float(r-self.target_dist_offset)
         theta_raw = -math.atan2(px, pz)
         if self.enable_theta_offset:
             theta = wrap_angle(theta_raw - self.theta_offset_rad)
