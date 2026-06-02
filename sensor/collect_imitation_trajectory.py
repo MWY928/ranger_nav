@@ -66,6 +66,10 @@ class ImitationTrajectoryCollector(object):
         self.last_sample_time = rospy.Time(0)
         self.last_obs_time = rospy.Time(0)
         self.sample_count = 0
+        self.goal_reached_sample_count = 0
+        self.goal_reached_distance = args.goal_reached_distance
+        if self.goal_reached_distance is None:
+            self.goal_reached_distance = float(args.target_distance)
 
         self.forward_speed = float(args.forward_speed)
         self.turn_speed = float(args.turn_speed)
@@ -146,6 +150,8 @@ class ImitationTrajectoryCollector(object):
             },
             "sample_rate_hz": self.args.sample_rate_hz,
             "sample_limit": self.sample_limit,
+            "goal_reached_distance": self.goal_reached_distance,
+            "stop_after_goal_steps": self.args.stop_after_goal_steps,
             "max_polar_age_sec": self.args.max_polar_age_sec,
         }
         path = os.path.join(self.run_dir, "run_meta.json")
@@ -315,13 +321,35 @@ class ImitationTrajectoryCollector(object):
 
     def _should_sample_now(self) -> bool:
         if self.sample_limit >= 0 and self.sample_count >= self.sample_limit:
-            self._publish_stop()
-            rospy.signal_shutdown("Sample limit reached.")
+            self._shutdown_after_stop("Sample limit reached.")
             return False
         if self.last_sample_time == rospy.Time(0):
             return True
         dt = (rospy.Time.now() - self.last_sample_time).to_sec()
         return dt >= self.min_sample_interval
+
+    def _shutdown_after_stop(self, reason: str):
+        self._publish_stop()
+        rospy.loginfo("%s Saved samples: %d", reason, self.sample_count)
+        rospy.signal_shutdown(reason)
+
+    def _update_goal_reached_stop_condition(self, polar_msg: PointStamped):
+        if self.args.stop_after_goal_steps < 0:
+            return
+
+        r = float(polar_msg.point.x)
+        reached = r <= float(self.goal_reached_distance)
+        if reached:
+            self.goal_reached_sample_count += 1
+        else:
+            self.goal_reached_sample_count = 0
+
+        if reached and self.goal_reached_sample_count >= self.args.stop_after_goal_steps:
+            self._shutdown_after_stop(
+                "Goal distance reached for {} samples.".format(
+                    self.goal_reached_sample_count
+                )
+            )
 
     def _save_sample(
         self,
@@ -407,9 +435,9 @@ class ImitationTrajectoryCollector(object):
                 action_id=action_id,
             )
             self.last_obs_time = rospy.Time.now()
+            self._update_goal_reached_stop_condition(polar_msg)
             if self.sample_limit >= 0 and self.sample_count >= self.sample_limit:
-                self._publish_stop()
-                rospy.signal_shutdown("Sample limit reached.")
+                self._shutdown_after_stop("Sample limit reached.")
         except Exception as e:
             self._publish_stop()
             rospy.logerr_throttle(1.0, "trajectory collection callback failed: %s", str(e))
@@ -467,7 +495,14 @@ def parse_args():
         default="./test_modules/test_results/il_trajectories",
     )
     parser.add_argument("--run_id", type=str, default=None)
-    parser.add_argument("--sample_limit", type=int, default=-1)
+    parser.add_argument(
+        "--sample_limit",
+        "--max_steps",
+        dest="sample_limit",
+        type=int,
+        default=200,
+        help="Maximum number of recorded samples. -1 means no hard limit.",
+    )
     parser.add_argument("--sample_rate_hz", type=float, default=10.0)
     parser.add_argument("--flush_every", type=int, default=10)
 
@@ -482,6 +517,18 @@ def parse_args():
     parser.add_argument("--target_distance", type=float, default=0.2)
     parser.add_argument("--turn_angle_thresh", type=float, default=0.3)
     parser.add_argument("--dist_deadband", type=float, default=0.03)
+    parser.add_argument(
+        "--goal_reached_distance",
+        type=float,
+        default=None,
+        help="Distance threshold for auto-stop. Defaults to target_distance.",
+    )
+    parser.add_argument(
+        "--stop_after_goal_steps",
+        type=int,
+        default=3,
+        help="Stop after this many consecutive recorded samples at goal distance. -1 disables.",
+    )
 
     parser.add_argument("--max_cmd_age_sec", type=float, default=0.5)
     parser.add_argument("--cmd_deadband", type=float, default=0.2)

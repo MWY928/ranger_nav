@@ -17,11 +17,15 @@
 # Default behavior:
 #   - Runs in heuristic mode, so this node publishes /cmd_vel itself.
 #   - Uses forward speed = 0.3 and turn speed = 0.3 from the Python defaults.
+#   - Stops after 200 recorded samples by default.
+#   - Stops after 3 consecutive goal-distance samples by default, so the
+#     dataset does not collect too many stop actions near the target.
 #   - Saves data under:
 #       test_modules/test_results/il_trajectories/<RUN_ID>
 #
 # Examples:
-#   bash record_imitation_trajectory.sh --sample_limit 200
+#   bash record_imitation_trajectory.sh --max_steps 200
+#   bash record_imitation_trajectory.sh --goal_reached_distance 0.2 --stop_after_goal_steps 3
 #   bash record_imitation_trajectory.sh --control_mode passive --action_source_topic /cmd_vel
 #
 # Extra arguments are forwarded to sensor/collect_imitation_trajectory.py.
@@ -44,10 +48,16 @@ fi
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 OUTPUT_DIR="$REPO_ROOT/test_modules/test_results/il_trajectories"
+MAX_STEPS="${MAX_STEPS:-200}"
+GOAL_REACHED_DISTANCE="${GOAL_REACHED_DISTANCE:-0.2}"
+STOP_AFTER_GOAL_STEPS="${STOP_AFTER_GOAL_STEPS:-3}"
 
 mkdir -p "$OUTPUT_DIR"
 
 echo "Recording imitation trajectory to: $OUTPUT_DIR/$RUN_ID"
+echo "Max steps: $MAX_STEPS"
+echo "Goal reached distance: $GOAL_REACHED_DISTANCE"
+echo "Stop after goal steps: $STOP_AFTER_GOAL_STEPS"
 
 exec python "$REPO_ROOT/sensor/collect_imitation_trajectory.py" \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
@@ -56,4 +66,7 @@ exec python "$REPO_ROOT/sensor/collect_imitation_trajectory.py" \
   --control_mode heuristic \
   --output_dir "$OUTPUT_DIR" \
   --run_id "$RUN_ID" \
+  --max_steps "$MAX_STEPS" \
+  --goal_reached_distance "$GOAL_REACHED_DISTANCE" \
+  --stop_after_goal_steps "$STOP_AFTER_GOAL_STEPS" \
   "$@"
