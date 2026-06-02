@@ -67,6 +67,7 @@ class ImitationTrajectoryCollector(object):
         self.last_obs_time = rospy.Time(0)
         self.sample_count = 0
         self.goal_reached_sample_count = 0
+        self.stop_action_sample_count = 0
         self.goal_reached_distance = args.goal_reached_distance
         if self.goal_reached_distance is None:
             self.goal_reached_distance = float(args.target_distance)
@@ -152,6 +153,7 @@ class ImitationTrajectoryCollector(object):
             "sample_limit": self.sample_limit,
             "goal_reached_distance": self.goal_reached_distance,
             "stop_after_goal_steps": self.args.stop_after_goal_steps,
+            "stop_after_stop_action_steps": self.args.stop_after_stop_action_steps,
             "max_polar_age_sec": self.args.max_polar_age_sec,
         }
         path = os.path.join(self.run_dir, "run_meta.json")
@@ -351,6 +353,22 @@ class ImitationTrajectoryCollector(object):
                 )
             )
 
+    def _update_stop_action_stop_condition(self, action_id: int):
+        if self.args.stop_after_stop_action_steps < 0:
+            return
+
+        if int(action_id) == 0:
+            self.stop_action_sample_count += 1
+        else:
+            self.stop_action_sample_count = 0
+
+        if self.stop_action_sample_count >= self.args.stop_after_stop_action_steps:
+            self._shutdown_after_stop(
+                "Stop action recorded for {} consecutive samples.".format(
+                    self.stop_action_sample_count
+                )
+            )
+
     def _save_sample(
         self,
         depth_meter: np.ndarray,
@@ -436,6 +454,7 @@ class ImitationTrajectoryCollector(object):
             )
             self.last_obs_time = rospy.Time.now()
             self._update_goal_reached_stop_condition(polar_msg)
+            self._update_stop_action_stop_condition(action_id)
             if self.sample_limit >= 0 and self.sample_count >= self.sample_limit:
                 self._shutdown_after_stop("Sample limit reached.")
         except Exception as e:
@@ -528,6 +547,12 @@ def parse_args():
         type=int,
         default=3,
         help="Stop after this many consecutive recorded samples at goal distance. -1 disables.",
+    )
+    parser.add_argument(
+        "--stop_after_stop_action_steps",
+        type=int,
+        default=3,
+        help="Stop after this many consecutive recorded stop actions. -1 disables.",
     )
 
     parser.add_argument("--max_cmd_age_sec", type=float, default=0.5)
