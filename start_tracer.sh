@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-pkill -f tracer_base_node
-sudo ip link set can0 down
-sudo modprobe -r gs_usb
+pkill -f tracer_base_node || true
+sudo ip link set can0 down || true
+sudo modprobe -r gs_usb || true
 
 source /opt/ros/noetic/setup.bash
 source /home/mobile/catkin_ws/devel/setup.bash

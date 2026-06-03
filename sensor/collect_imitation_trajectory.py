@@ -533,7 +533,7 @@ def parse_args():
 
     parser.add_argument("--forward_speed", type=float, default=0.3)
     parser.add_argument("--turn_speed", type=float, default=0.3)
-    parser.add_argument("--target_distance", type=float, default=0.2)
+    parser.add_argument("--target_distance", type=float, default=0.3)
     parser.add_argument("--turn_angle_thresh", type=float, default=0.3)
     parser.add_argument("--dist_deadband", type=float, default=0.03)
     parser.add_argument(
