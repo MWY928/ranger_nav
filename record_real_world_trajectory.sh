@@ -4,7 +4,7 @@
 # record_real_world_trajectory.sh
 #
 # Purpose:
-#   Record real-world deployment trajectories from the FALCON ROS bridge.
+#   Record real-world navigation algo deployment trajectories from the FALCON ROS bridge.
 #
 # This script records:
 #   1. Goal polar coordinates: distance r in meters and angle theta in radians
@@ -12,7 +12,8 @@
 #   3. Policy actions and action probabilities
 #
 # Notes:
-#   - Replay dumping is enabled for later replay/ sim-real comparison.
+#   - Replay dumping can be used for later replay/ sim-real comparison.
+#   - Or used as a debug tool
 #   - This script is for real-robot deployment data recording.
 # =========================================================
 
@@ -21,7 +22,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 RESULTS_DIR="$REPO_ROOT/test_modules/test_results"
-CHECKPOINT="$REPO_ROOT/weights/ours_hm3d_val_best.pth"
+CHECKPOINT="$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm2.pth"
 REPLAY_DUMP_LIMIT=60
 REPLAY_DUMP_ROOT="$RESULTS_DIR/bridge_policy_replay"
 RUN_ID="${1:-$(date +%Y%m%d_%H%M%S)}"
