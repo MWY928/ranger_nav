@@ -9,7 +9,7 @@ CHECKPOINT="weights/ours_hm3d_val_best.pth"
 
 DATA_ROOT="./test_modules/test_results/il_trajectories"
 
-OUTPUT_CKPT="./checkpoints/falcon_bc_70traj_action_head_lstm2.pth"
+OUTPUT_CKPT="./checkpoints/falcon_bc_70traj_action_head_lstm005.pth"
 
 HABITAT_BASELINES="/home/mobile/ranger_nav/habitat-baselines"
 HABITAT_LAB="/home/mobile/ranger_nav/habitat-lab"
@@ -27,6 +27,7 @@ python IL_SFT/offline_bc_finetune.py \
     --habitat_baselines_path "${HABITAT_BASELINES}" \
     --habitat_lab_path "${HABITAT_LAB}" \
     --project_path "${PROJECT_ROOT}" \
+    --kl_coef 0.05 \
     --epochs 35 \
     --batch_size 4 \
     --freeze_mode action_head_lstm \

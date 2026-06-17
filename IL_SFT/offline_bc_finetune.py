@@ -35,7 +35,7 @@ python IL_SFT/offline_bc_finetune.py \
     --epochs 20 \
     --batch_size 4 \
     --lr 1e-4 \
-    --kl_coef 0.02 \
+    --kl_coef 0.03 \
     --class_balance
 
 Recommended first sanity check:
@@ -928,7 +928,7 @@ def parse_args():
         default=[],
         help="Additional substring pattern for parameters to unfreeze. Can be passed multiple times.",
     )
-    p.add_argument("--kl_coef", type=float, default=0.02, help="KL(old_policy || new_policy) coefficient.")
+    p.add_argument("--kl_coef", type=float, default=0.03, help="KL(old_policy || new_policy) coefficient.")
     p.add_argument("--entropy_coef", type=float, default=0.0)
     p.add_argument("--class_balance", action="store_true", help="Use inverse-frequency action weights for BC loss.")
     p.add_argument("--max_grad_norm", type=float, default=0.5)
