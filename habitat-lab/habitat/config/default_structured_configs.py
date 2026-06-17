@@ -1510,6 +1510,13 @@ class HabitatSimDepthSensorConfig(SimulatorCameraSensorConfig):
     min_depth: float = 0.0
     max_depth: float = 10.0
     normalize_depth: bool = True
+    realistic_noise_enabled: bool = False
+    realistic_noise_alpha: float = 0.002
+    realistic_noise_dropout_base: float = 0.01
+    realistic_noise_dropout_far: float = 0.08
+    realistic_noise_corr_scale: int = 8
+    realistic_noise_edge_dropout: float = 0.15
+    realistic_noise_edge_threshold: float = 0.3
 
 
 @dataclass
