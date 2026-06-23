@@ -16,7 +16,7 @@ defaults:
 
 habitat:
   environment:
-    max_episode_steps: 500
+    max_episode_steps: 1000
 
   simulator:
     type: RearrangeSim-v2
@@ -51,9 +51,9 @@ habitat:
             max_depth: 10.0
             normalize_depth: true
             realistic_noise_enabled: true
-            realistic_noise_alpha: 0.002
-            realistic_noise_dropout_base: 0.01
-            realistic_noise_dropout_far: 0.08
+            realistic_noise_alpha: 0.0025
+            realistic_noise_dropout_base: 0.015
+            realistic_noise_dropout_far: 0.083
             realistic_noise_corr_scale: 8
             realistic_noise_edge_dropout: 0.15
             realistic_noise_edge_threshold: 0.3

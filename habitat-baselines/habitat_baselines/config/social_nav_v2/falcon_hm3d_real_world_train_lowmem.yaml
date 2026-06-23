@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - falcon_hm3d_real_world_train
+  - _self_
+
+habitat_baselines:
+  num_environments: 2
+  tensorboard_dir: "training/falcon/hm3d_real_world_lowmem/tb"
+  video_dir: "evaluation/falcon/hm3d_real_world_lowmem/video"
+  checkpoint_folder: "evaluation/falcon/hm3d_real_world_lowmem/checkpoints"
+
+  rl:
+    ppo:
+      num_steps: 64
+      num_mini_batch: 8
+
+    ddppo:
+      train_encoder: False

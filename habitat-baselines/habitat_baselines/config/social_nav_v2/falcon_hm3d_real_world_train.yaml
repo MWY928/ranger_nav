@@ -27,10 +27,10 @@ habitat:
     lab_sensors:
       agent_0_pointgoal_with_gps_compass:
         noise_enabled: true
-        sigma_r: 0.03
-        sigma_theta: 0.03490658503988659
-        drift_r_std: 0.002
-        drift_theta_std: 0.0017453292519943296
+        sigma_r: 0.04 #每帧距离噪声，单位 m
+        sigma_theta: 0.032 #每帧角度噪声，单位 rad
+        drift_r_std: 0.0015 #距离随机游走漂移，每帧累积
+        drift_theta_std: 0.0012 # 角度随机游走漂移，每帧累积，单位 rad
 
 habitat_baselines:
   tensorboard_dir: "training/falcon/hm3d_real_world/tb"
