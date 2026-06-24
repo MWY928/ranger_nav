@@ -13,7 +13,7 @@ habitat_baselines:
   rl:
     ppo:
       num_steps: 64
-      num_mini_batch: 8
+      num_mini_batch: 2
 
     ddppo:
       train_encoder: False
