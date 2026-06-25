@@ -141,6 +141,13 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
         "max_depth",
         "min_depth",
         "normalize_depth",
+        "realistic_noise_alpha",
+        "realistic_noise_corr_scale",
+        "realistic_noise_dropout_base",
+        "realistic_noise_dropout_far",
+        "realistic_noise_edge_dropout",
+        "realistic_noise_edge_threshold",
+        "realistic_noise_enabled",
     }.union(HabitatSimSensor._config_ignore_keys)
     sim_sensor_type = habitat_sim.SensorType.DEPTH
 
@@ -151,6 +158,23 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
         self.min_depth_value = config.min_depth
         self.max_depth_value = config.max_depth
         self.normalize_depth = config.normalize_depth
+        self.realistic_noise_enabled = getattr(
+            config, "realistic_noise_enabled", False
+        )
+        self.realistic_noise_kwargs = {
+            "alpha": getattr(config, "realistic_noise_alpha", 0.002),
+            "dropout_base": getattr(
+                config, "realistic_noise_dropout_base", 0.01
+            ),
+            "dropout_far": getattr(config, "realistic_noise_dropout_far", 0.08),
+            "corr_scale": getattr(config, "realistic_noise_corr_scale", 8),
+            "edge_dropout": getattr(
+                config, "realistic_noise_edge_dropout", 0.15
+            ),
+            "edge_threshold": getattr(
+                config, "realistic_noise_edge_threshold", 0.3
+            ),
+        }
         if self.normalize_depth:
             self._obs_shape = spaces.Box(
                 low=0,
@@ -179,20 +203,15 @@ class HabitatSimDepthSensor(DepthSensor, HabitatSimSensor):
         if isinstance(obs, np.ndarray):
             obs = np.clip(obs, self.min_depth_value, self.max_depth_value)
 
-            # Optional depth noise injection.
-            # Comment out this whole block to disable noise and recover original behavior.
-            try:
+            if self.realistic_noise_enabled:
                 from noise_test.depth_noise import add_realistic_depth_noise
 
                 obs = add_realistic_depth_noise(
                     obs,
                     max_depth=self.max_depth_value,
+                    **self.realistic_noise_kwargs,
                 )
-                # Keep depth in the valid range before normalization.
                 obs = np.clip(obs, self.min_depth_value, self.max_depth_value)
-            except Exception:
-                # Keep simulator robust if optional noise module is unavailable.
-                pass
 
             obs = np.expand_dims(
                 obs, axis=2

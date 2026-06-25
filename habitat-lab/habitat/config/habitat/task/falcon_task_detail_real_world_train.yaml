@@ -1,0 +1,7 @@
+defaults:
+  - falcon_task_detail
+  - _self_
+
+measurements:
+  success:
+    success_distance: 0.4

@@ -44,6 +44,17 @@ class OracleFollowerSensorConfig(LabSensorConfig):
     
     type: str = "OracleFollowerSensor"
 
+@dataclass
+class NoisyPointGoalWithGPSCompassSensorConfig(LabSensorConfig):
+    type: str = "NoisyPointGoalWithGPSCompassSensor"
+    goal_format: str = "POLAR"
+    dimensionality: int = 2
+    noise_enabled: bool = True
+    sigma_r: float = 0.03
+    sigma_theta: float = 0.03490658503988659
+    drift_r_std: float = 0.002
+    drift_theta_std: float = 0.0017453292519943296
+
 
 @dataclass
 class HumanVelocitySensorConfig(LabSensorConfig):
@@ -161,6 +172,72 @@ class OracleFollowerSensor(PointGoalSensor):
         return self._compute_pointgoal(
             agent_position, rotation_world_agent, self._path_to_point_1(agent_position,goal_position)
         )
+
+@registry.register_sensor(name="NoisyPointGoalWithGPSCompassSensor")
+class NoisyPointGoalWithGPSCompassSensor(PointGoalSensor):
+    cls_uuid: str = "pointgoal_with_gps_compass"
+
+    def __init__(
+        self, sim: Simulator, config: "DictConfig", *args: Any, **kwargs: Any
+    ):
+        super().__init__(sim=sim, config=config)
+        self.noise_enabled = config.noise_enabled
+        self.sigma_r = config.sigma_r
+        self.sigma_theta = config.sigma_theta
+        self.drift_r_std = config.drift_r_std
+        self.drift_theta_std = config.drift_theta_std
+        self._episode_id = None
+        self._r_bias = 0.0
+        self._theta_bias = 0.0
+
+    def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
+        return self.cls_uuid
+
+    @staticmethod
+    def _wrap_angle(x):
+        return (x + np.pi) % (2 * np.pi) - np.pi
+
+    def _reset_noise(self):
+        self._r_bias = 0.0
+        self._theta_bias = 0.0
+
+    def _apply_noise(self, pointgoal):
+        if not self.noise_enabled or self._goal_format != "POLAR":
+            return pointgoal
+
+        noisy_pointgoal = np.array(pointgoal, dtype=np.float32, copy=True)
+        self._r_bias += np.random.randn() * self.drift_r_std
+        self._theta_bias += np.random.randn() * self.drift_theta_std
+
+        noisy_pointgoal[0] = max(
+            0.0,
+            noisy_pointgoal[0] + self._r_bias + np.random.randn() * self.sigma_r,
+        )
+        noisy_pointgoal[1] = self._wrap_angle(
+            noisy_pointgoal[1]
+            + self._theta_bias
+            + np.random.randn() * self.sigma_theta
+        )
+        return noisy_pointgoal
+
+    def get_observation(
+        self, observations, episode, *args: Any, **kwargs: Any
+    ):
+        episode_id = getattr(episode, "episode_id", None)
+        if episode_id != self._episode_id:
+            self._episode_id = episode_id
+            self._reset_noise()
+
+        agent_id = getattr(self, "agent_id", 0)
+        agent_state = self._sim.get_agent_state(agent_id)
+        agent_position = agent_state.position
+        rotation_world_agent = agent_state.rotation
+        goal_position = np.array(episode.goals[0].position, dtype=np.float32)
+
+        pointgoal = self._compute_pointgoal(
+            agent_position, rotation_world_agent, goal_position
+        )
+        return self._apply_noise(pointgoal)
 
 @registry.register_sensor
 class HumanVelocitySensor(UsesArticulatedAgentInterface, Sensor):
@@ -447,6 +524,12 @@ cs.store(
     group="habitat/task/lab_sensors",
     name="oracle_follower_sensor",
     node=OracleFollowerSensorConfig,
+)
+cs.store(
+    package="habitat.task.lab_sensors.noisy_pointgoal_with_gps_compass_sensor",
+    group="habitat/task/lab_sensors",
+    name="noisy_pointgoal_with_gps_compass_sensor",
+    node=NoisyPointGoalWithGPSCompassSensorConfig,
 )
 cs.store(
     package="habitat.task.lab_sensors.human_velocity_sensor",
