@@ -21,9 +21,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
-RESULTS_DIR="$REPO_ROOT/test_modules/test_results"
+RESULTS_DIR="$REPO_ROOT/test_modules/test_results/004"
 CHECKPOINT="$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm004.pth"
-REPLAY_DUMP_LIMIT=700
+REPLAY_DUMP_LIMIT=900
 REPLAY_DUMP_ROOT="$RESULTS_DIR/traj/bridge_policy_replay/00406"
 RUN_ID="${1:-$(date +%Y%m%d_%H%M%S)}"
 REPLAY_DUMP_DIR="${REPLAY_DUMP_ROOT}/${RUN_ID}"

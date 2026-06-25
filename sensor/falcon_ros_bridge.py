@@ -809,7 +809,7 @@ def parse_args():
     p.add_argument("--depth_obs_key", type=str, default="articulated_agent_jaw_depth")
     p.add_argument("--goal_obs_key", type=str, default="pointgoal_with_gps_compass")
 
-    p.add_argument("--forward_speed", type=float, default=0.3)
+    p.add_argument("--forward_speed", type=float, default=0.6)
     p.add_argument("--turn_speed", type=float, default= 0.6)
     return p.parse_args()
 
