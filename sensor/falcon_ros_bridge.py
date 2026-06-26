@@ -7,7 +7,7 @@ Data flow (runtime):
 1) Subscribe Depth + goal signal (polar topic PointStamped).
 2) Build policy observation in Falcon/PointNav format.
 3) Run policy inference (Discrete(4)).
-4) Map discrete action to Twist and publish to cmd_vel.
+4) Publish the discrete action id on a ROS topic.
 
 Safety behavior:
 - If goal input is missing/too old, publish stop.
@@ -25,12 +25,12 @@ import cv2
 import numpy as np
 import rospy
 import torch
-from geometry_msgs.msg import PointStamped, Twist
+from geometry_msgs.msg import PointStamped
 from gym.spaces import Box
 from gym.spaces import Dict as SpaceDict
 from gym.spaces import Discrete
 from sensor_msgs.msg import Image
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Int32
 
 import sys
 sys.path.append("/home/mobile/ranger_nav/habitat-baselines/")
@@ -39,6 +39,14 @@ sys.path.append("/home/mobile/ranger_nav")
 
 from habitat_baselines.rl.ddppo.policy import PointNavResNetPolicy
 from habitat_baselines.utils.common import batch_obs
+
+
+ACTION_NAMES = {
+    0: "stop",
+    1: "forward",
+    2: "left",
+    3: "right",
+}
 
 
 def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
@@ -90,7 +98,7 @@ def _select_agent0_checkpoint_state_dict(ckpt_obj):
 
 
 class FalconRosBridge(object):
-    """Bridge ROS sensor streams to Falcon policy and publish cmd_vel."""
+    """Bridge ROS sensor streams to Falcon policy and publish discrete actions."""
 
     def __init__(self, args):
         # 初始化 ROS 节点和推理设备。
@@ -146,8 +154,9 @@ class FalconRosBridge(object):
         self.not_done_masks = torch.zeros(1, 1, dtype=torch.bool, device=self.device)
         self.prev_actions = torch.zeros(1, 1, dtype=torch.long, device=self.device)
 
-        # ROS 发布器：cmd_vel 控制机器人，debug_obs_topic 用作推理心跳。
-        self.cmd_pub = rospy.Publisher(args.cmd_vel_topic, Twist, queue_size=10)
+        self.action_topic = args.action_topic
+        self.action_pub = rospy.Publisher(self.action_topic, Int32, queue_size=10)
+        rospy.on_shutdown(self._publish_stop)
         self.debug_obs_pub = rospy.Publisher(args.debug_obs_topic, Header, queue_size=10)
 
         # ROS 订阅器：极坐标目标和深度图。
@@ -155,14 +164,6 @@ class FalconRosBridge(object):
             args.polar_topic, PointStamped, self._polar_cb, queue_size=20
         )
         self.depth_sub = rospy.Subscriber(args.depth_topic, Image, self._cb_depth, queue_size=10)
-
-        # Falcon 输出 Discrete(4)，这里映射成 ROS Twist 速度指令。
-        self.action_to_cmd = {
-            0: (0.0, 0.0),  # stop
-            1: (args.forward_speed, 0.0),  # forward
-            2: (0.0, args.turn_speed),  # turn left
-            3: (0.0, -args.turn_speed),  # turn right
-        }
 
         if self.debug_depth:
             os.makedirs(self.debug_depth_dump_dir, exist_ok=True)
@@ -173,7 +174,7 @@ class FalconRosBridge(object):
 
         rospy.loginfo("Falcon ROS bridge started.")
         rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
-        rospy.loginfo("Publish:   %s", args.cmd_vel_topic)
+        rospy.loginfo("Publish action_id: %s", self.action_topic)
         # Watchdog 定时检查输入是否超时，超时就发布停车命令。
         self.watchdog = rospy.Timer(rospy.Duration(0.05), self._watchdog_cb)
 
@@ -568,7 +569,7 @@ class FalconRosBridge(object):
         # 打印一次推理的关键输入、输出和深度处理统计，用于检查映射是否正确。
         g = obs[self.goal_key]
         d = obs[self.depth_key]
-        lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
+        action_name = ACTION_NAMES.get(act_id, "action_{}".format(act_id))
 
         if self.debug_depth:
             rospy.loginfo(
@@ -593,10 +594,10 @@ class FalconRosBridge(object):
 
         rospy.loginfo(
             "[DBG_ACT] goal[r,theta]=[{:.3f}, {:.3f}] input_theta={:.3f}(pass-through) depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
-            "act_id={} cmd=({:.3f},{:.3f}) probs=[{}]".format(
+            "act_id={}({}) action_topic={} probs=[{}]".format(
                 float(g[0]), float(g[1]), float(theta_in),
                 tuple(d.shape), float(d.min()), float(d.max()),
-                int(act_id), float(lin), float(ang),
+                int(act_id), action_name, self.action_topic,
                 self._fmt_action_probs(probs),
             )
         )
@@ -621,7 +622,7 @@ class FalconRosBridge(object):
         prefix = "bridge_policy_replay_{}".format(stamp_ns)
         npz_path = os.path.abspath(os.path.join(self.replay_dump_dir, prefix + ".npz"))
         meta_path = os.path.abspath(os.path.join(self.replay_dump_dir, prefix + ".json"))
-        lin, ang = self.action_to_cmd.get(act_id, (0.0, 0.0))
+        action_name = ACTION_NAMES.get(act_id, "action_{}".format(act_id))
 
         try:
             np.savez_compressed(
@@ -644,8 +645,8 @@ class FalconRosBridge(object):
                 "max_depth_m": float(self.max_depth_m),
                 "deterministic": bool(self.deterministic),
                 "action_id": int(act_id),
-                "cmd_linear_x": float(lin),
-                "cmd_angular_z": float(ang),
+                "action_name": action_name,
+                "action_topic": self.action_topic,
                 "action_probs": None if probs is None else probs.tolist(),
                 "depth_msg_stamp": depth_msg.header.stamp.to_sec(),
                 "polar_msg_stamp": polar_msg.header.stamp.to_sec(),
@@ -666,17 +667,12 @@ class FalconRosBridge(object):
 
 
     def _publish_cmd(self, action_id: int):
-        # Action id -> (linear x, angular z).
-        lin, ang = self.action_to_cmd.get(action_id, (0.0, 0.0))
-        tw = Twist()
-        tw.linear.x = lin
-        tw.angular.z = ang
-        self.cmd_pub.publish(tw)
+        msg = Int32()
+        msg.data = int(action_id)
+        self.action_pub.publish(msg)
 
     def _publish_stop(self):
-        # 发布全 0 Twist，作为缺输入、异常和 watchdog 超时的安全停车动作。
-        tw = Twist()
-        self.cmd_pub.publish(tw)
+        self._publish_cmd(0)
 
     def _polar_cb(self, polar_msg: PointStamped):
         # 极坐标目标回调只负责缓存，真正推理由深度图回调驱动。
@@ -774,7 +770,7 @@ class FalconRosBridge(object):
 
 def parse_args():
     # 命令行参数用于适配不同 topic、模型结构、速度标定和调试需求。
-    p = argparse.ArgumentParser(description="ROS Depth+Polar -> Falcon -> cmd_vel bridge")
+    p = argparse.ArgumentParser(description="ROS Depth+Polar -> Falcon discrete action bridge")
     p.add_argument("--checkpoint", type=str, required=True)
     # Backward-compatibility flags kept for old launch scripts.
     # They are ignored because this bridge is now fixed to depth + polar topic.
@@ -783,7 +779,8 @@ def parse_args():
 
     p.add_argument("--depth_topic", type=str, default="/camera/aligned_depth_to_color/image_raw")
     p.add_argument("--polar_topic", type=str, default="/tag_polar")
-    p.add_argument("--cmd_vel_topic", type=str, default="/cmd_vel")
+    p.add_argument("--cmd_vel_topic", type=str, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--action_topic", type=str, default="/falcon/action_id")
     p.add_argument("--debug_obs_topic", type=str, default="/falcon/obs_heartbeat")
 
     p.add_argument("--resolution", type=int, default=256)
@@ -809,8 +806,6 @@ def parse_args():
     p.add_argument("--depth_obs_key", type=str, default="articulated_agent_jaw_depth")
     p.add_argument("--goal_obs_key", type=str, default="pointgoal_with_gps_compass")
 
-    p.add_argument("--forward_speed", type=float, default=0.6)
-    p.add_argument("--turn_speed", type=float, default= 0.6)
     return p.parse_args()
 
 

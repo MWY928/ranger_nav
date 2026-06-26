@@ -6,6 +6,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   sensor_msgs
   geometry_msgs
+  nav_msgs
 )
 
 catkin_package()
@@ -13,5 +14,6 @@ catkin_package()
 catkin_install_python(PROGRAMS
   src/realsense_stream.py
   src/polar_distance.py
+  src/polar_goal_tracker.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

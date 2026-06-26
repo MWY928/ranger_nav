@@ -1,12 +1,22 @@
 <launch>
-  <rosparam command="load" file="$(find ranger_nav)/config/tags.yaml"/>
+  <!--
+    Run apriltag_ros locally, but subscribe to Go2 Jetson D435 topics.
+    Override these args if the remote realsense2_ros node is namespaced.
+  -->
+  <arg name="image_topic" default="/camera/color/image_raw" />
+  <arg name="camera_info_topic" default="/camera/color/camera_info" />
+  <arg name="detections_topic" default="/tag_detections" />
+  <arg name="tags_config" default="$(find ranger_nav)/config/tags.yaml" />
 
   <node pkg="apriltag_ros"
         type="apriltag_ros_continuous_node"
         name="apriltag_detector"
         output="screen"
         clear_params="true">
-    <remap from="image_rect" to="/camera/color/image_raw" />
-    <remap from="camera_info" to="/camera/color/camera_info" />
+    <rosparam command="load" file="$(arg tags_config)" />
+
+    <remap from="image_rect" to="$(arg image_topic)" />
+    <remap from="camera_info" to="$(arg camera_info_topic)" />
+    <remap from="tag_detections" to="$(arg detections_topic)" />
   </node>
 </launch>

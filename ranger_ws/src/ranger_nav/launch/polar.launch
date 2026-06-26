@@ -1,11 +1,30 @@
 <launch>
+  <arg name="detections_topic" default="/tag_detections" />
+  <arg name="polar_topic" default="/tag_polar" />
+  <arg name="output_frame_id" default="base_link" />
+  <arg name="target_tag_id" default="0" />
+  <arg name="use_first_detection" default="false" />
+  <arg name="theta_offset_rad" default="0.0" />
+  <arg name="enable_theta_offset" default="true" />
+  <arg name="theta_deadband_rad" default="0.0" />
+  <arg name="enable_theta_deadband" default="true" />
+  <arg name="distance_offset" default="0.6" />
+  <arg name="min_distance" default="0.0" />
+
   <node pkg="ranger_nav"
         type="polar_distance.py"
         name="tag_to_polar_node"
         output="screen">
-    <param name="detections_topic" value="/tag_detections" />
-    <param name="output_topic" value="/tag_polar" />
-    <param name="target_tag_id" value="0" />
-    <param name="use_first_detection" value="false" />
+    <param name="detections_topic" value="$(arg detections_topic)" />
+    <param name="output_topic" value="$(arg polar_topic)" />
+    <param name="output_frame_id" value="$(arg output_frame_id)" />
+    <param name="target_tag_id" value="$(arg target_tag_id)" />
+    <param name="use_first_detection" value="$(arg use_first_detection)" />
+    <param name="theta_offset_rad" value="$(arg theta_offset_rad)" />
+    <param name="enable_theta_offset" value="$(arg enable_theta_offset)" />
+    <param name="theta_deadband_rad" value="$(arg theta_deadband_rad)" />
+    <param name="enable_theta_deadband" value="$(arg enable_theta_deadband)" />
+    <param name="distance_offset" value="$(arg distance_offset)" />
+    <param name="min_distance" value="$(arg min_distance)" />
   </node>
 </launch>

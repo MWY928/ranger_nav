@@ -20,7 +20,7 @@ mkdir -p "$RESULTS_DIR"
 
 # This test bridge script is designed to debuging the navigation algo, which:
 # - --debug_mapping prints each inference step to ROS logs, including goal
-#   polar input, selected action id, mapped cmd_vel, and action probabilities.
+#   polar input, selected action id, action topic, and action probabilities.
 # - --debug_depth prints depth preprocessing stats to ROS logs, including raw
 #   encoding/shape/dtype, valid/min/max/mean/p50/p95/zero ratios, crop shape,
 #   and normalized Falcon input shape/range.
@@ -31,14 +31,13 @@ mkdir -p "$RESULTS_DIR"
 #   depth statistics. It saves only the first frame to avoid large log files.
 # - This script does not enable --replay_dump_enabled, so it does not save
 #   policy replay .npz/.json files.
-
-
+ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
 
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm2.pth" \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
   --polar_topic /tag_polar \
-  --cmd_vel_topic /cmd_vel \
+  --action_topic "$ACTION_TOPIC" \
   --debug_mapping \
   --debug_depth \
   --debug_depth_dump_dir "$RESULTS_DIR/bridge_depth_samples"

@@ -17,8 +17,10 @@ fi
 source /home/mobile/miniconda3/etc/profile.d/conda.sh
 conda activate falcon
 
+ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
+
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm0045.pth" \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
   --polar_topic /tag_polar \
-  --cmd_vel_topic /cmd_vel
+  --action_topic "$ACTION_TOPIC"

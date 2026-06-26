@@ -35,11 +35,13 @@ echo "Recording replay samples to: $REPLAY_DUMP_DIR"
 echo "Recording depth debug samples to: $DEBUG_DEPTH_DUMP_DIR"
 echo "Replay dump limit: $REPLAY_DUMP_LIMIT"
 
+ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
+
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$CHECKPOINT" \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
   --polar_topic /tag_polar \
-  --cmd_vel_topic /cmd_vel \
+  --action_topic "$ACTION_TOPIC" \
   --debug_mapping \
   --debug_depth \
   --debug_depth_dump_dir "$DEBUG_DEPTH_DUMP_DIR" \
