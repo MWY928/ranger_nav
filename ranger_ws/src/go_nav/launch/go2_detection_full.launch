@@ -1,10 +1,12 @@
 <launch>
-  <!-- Go2 Jetson runs realsense2_ros; this workstation runs apriltag_ros + polar tracker. -->
+  <!-- Self-contained Go2 detection stack:
+       remote D435 image -> local apriltag_ros -> go_nav polar_goal_tracker. -->
   <arg name="image_topic" default="/camera/color/image_raw" />
   <arg name="camera_info_topic" default="/camera/color/camera_info" />
   <arg name="detections_topic" default="/tag_detections" />
   <arg name="polar_topic" default="/tag_polar" />
   <arg name="output_frame_id" default="base_link" />
+  <arg name="tags_config" default="$(find go_nav)/config/tags.yaml" />
 
   <arg name="target_tag_id" default="0" />
   <arg name="use_first_detection" default="false" />
@@ -22,25 +24,37 @@
   <arg name="publish_rate_hz" default="20.0" />
   <arg name="alpha" default="0.5" />
 
-  <include file="$(find ranger_nav)/launch/cam_tag.launch">
-    <arg name="image_topic" value="$(arg image_topic)" />
-    <arg name="camera_info_topic" value="$(arg camera_info_topic)" />
-    <arg name="detections_topic" value="$(arg detections_topic)" />
-    <arg name="polar_topic" value="$(arg polar_topic)" />
-    <arg name="output_frame_id" value="$(arg output_frame_id)" />
-    <arg name="target_tag_id" value="$(arg target_tag_id)" />
-    <arg name="use_first_detection" value="$(arg use_first_detection)" />
-    <arg name="theta_offset_rad" value="$(arg theta_offset_rad)" />
-    <arg name="enable_theta_offset" value="$(arg enable_theta_offset)" />
-    <arg name="theta_deadband_rad" value="$(arg theta_deadband_rad)" />
-    <arg name="enable_theta_deadband" value="$(arg enable_theta_deadband)" />
-    <arg name="distance_offset" value="$(arg distance_offset)" />
-    <arg name="min_distance" value="$(arg min_distance)" />
-    <arg name="use_odom_fallback" value="$(arg use_odom_fallback)" />
-    <arg name="odom_topic" value="$(arg odom_topic)" />
-    <arg name="lost_timeout_sec" value="$(arg lost_timeout_sec)" />
-    <arg name="predict_timeout_sec" value="$(arg predict_timeout_sec)" />
-    <arg name="publish_rate_hz" value="$(arg publish_rate_hz)" />
-    <arg name="alpha" value="$(arg alpha)" />
-  </include>
+  <node pkg="apriltag_ros"
+        type="apriltag_ros_continuous_node"
+        name="apriltag_detector"
+        output="screen"
+        clear_params="true">
+    <rosparam command="load" file="$(arg tags_config)" />
+    <remap from="image_rect" to="$(arg image_topic)" />
+    <remap from="camera_info" to="$(arg camera_info_topic)" />
+    <remap from="tag_detections" to="$(arg detections_topic)" />
+  </node>
+
+  <node pkg="go_nav"
+        type="polar_goal_tracker.py"
+        name="polar_goal_tracker_node"
+        output="screen">
+    <param name="detections_topic" value="$(arg detections_topic)" />
+    <param name="output_topic" value="$(arg polar_topic)" />
+    <param name="output_frame_id" value="$(arg output_frame_id)" />
+    <param name="target_tag_id" value="$(arg target_tag_id)" />
+    <param name="use_first_detection" value="$(arg use_first_detection)" />
+    <param name="theta_offset_rad" value="$(arg theta_offset_rad)" />
+    <param name="enable_theta_offset" value="$(arg enable_theta_offset)" />
+    <param name="theta_deadband_rad" value="$(arg theta_deadband_rad)" />
+    <param name="enable_theta_deadband" value="$(arg enable_theta_deadband)" />
+    <param name="distance_offset" value="$(arg distance_offset)" />
+    <param name="min_distance" value="$(arg min_distance)" />
+    <param name="use_odom_fallback" value="$(arg use_odom_fallback)" />
+    <param name="odom_topic" value="$(arg odom_topic)" />
+    <param name="lost_timeout_sec" value="$(arg lost_timeout_sec)" />
+    <param name="predict_timeout_sec" value="$(arg predict_timeout_sec)" />
+    <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+    <param name="alpha" value="$(arg alpha)" />
+  </node>
 </launch>
