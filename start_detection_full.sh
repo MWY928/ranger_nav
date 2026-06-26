@@ -30,7 +30,7 @@ echo "AprilTag detections topic:  $TAG_DETECTIONS_TOPIC"
 echo "Polar output topic:         $POLAR_TOPIC"
 echo "Use odom fallback:          $USE_ODOM_FALLBACK"
 
-roslaunch ranger_nav cam_tag.launch \
+roslaunch go_nav go2_detection_full.launch \
   image_topic:="$GO2_IMAGE_TOPIC" \
   camera_info_topic:="$GO2_CAMERA_INFO_TOPIC" \
   detections_topic:="$TAG_DETECTIONS_TOPIC" \

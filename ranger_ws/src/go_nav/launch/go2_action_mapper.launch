@@ -1,0 +1,28 @@
+<launch>
+  <!-- Run this launch from an environment that can import unitree_sdk2py. -->
+  <arg name="action_topic" default="/falcon/action_id" />
+  <arg name="network_interface" default="eth0" />
+  <arg name="domain_id" default="0" />
+  <arg name="sdk_timeout_sec" default="10.0" />
+  <arg name="forward_speed" default="0.6" />
+  <arg name="turn_speed" default="0.6" />
+  <arg name="action_timeout_sec" default="0.3" />
+  <arg name="watchdog_rate_hz" default="20.0" />
+  <arg name="dry_run" default="false" />
+  <arg name="balance_stand_on_start" default="false" />
+
+  <node pkg="go_nav"
+        type="unitree_action_mapper.py"
+        name="unitree_action_mapper"
+        output="screen"
+        args="--action_topic $(arg action_topic)
+              --network_interface $(arg network_interface)
+              --domain_id $(arg domain_id)
+              --sdk_timeout_sec $(arg sdk_timeout_sec)
+              --forward_speed $(arg forward_speed)
+              --turn_speed $(arg turn_speed)
+              --action_timeout_sec $(arg action_timeout_sec)
+              --watchdog_rate_hz $(arg watchdog_rate_hz)
+              --dry_run $(arg dry_run)
+              --balance_stand_on_start $(arg balance_stand_on_start)" />
+</launch>

@@ -1,0 +1,33 @@
+<launch>
+  <!-- Simple Go2 detection stack: remote D435 image -> local apriltag_ros -> polar_distance. -->
+  <arg name="image_topic" default="/camera/color/image_raw" />
+  <arg name="camera_info_topic" default="/camera/color/camera_info" />
+  <arg name="detections_topic" default="/tag_detections" />
+  <arg name="polar_topic" default="/tag_polar" />
+  <arg name="output_frame_id" default="base_link" />
+
+  <arg name="target_tag_id" default="0" />
+  <arg name="use_first_detection" default="false" />
+  <arg name="theta_offset_rad" default="0.0" />
+  <arg name="enable_theta_offset" default="true" />
+  <arg name="theta_deadband_rad" default="0.0" />
+  <arg name="enable_theta_deadband" default="true" />
+  <arg name="distance_offset" default="0.6" />
+  <arg name="min_distance" default="0.0" />
+
+  <include file="$(find ranger_nav)/launch/linear_info.launch">
+    <arg name="image_topic" value="$(arg image_topic)" />
+    <arg name="camera_info_topic" value="$(arg camera_info_topic)" />
+    <arg name="detections_topic" value="$(arg detections_topic)" />
+    <arg name="polar_topic" value="$(arg polar_topic)" />
+    <arg name="output_frame_id" value="$(arg output_frame_id)" />
+    <arg name="target_tag_id" value="$(arg target_tag_id)" />
+    <arg name="use_first_detection" value="$(arg use_first_detection)" />
+    <arg name="theta_offset_rad" value="$(arg theta_offset_rad)" />
+    <arg name="enable_theta_offset" value="$(arg enable_theta_offset)" />
+    <arg name="theta_deadband_rad" value="$(arg theta_deadband_rad)" />
+    <arg name="enable_theta_deadband" value="$(arg enable_theta_deadband)" />
+    <arg name="distance_offset" value="$(arg distance_offset)" />
+    <arg name="min_distance" value="$(arg min_distance)" />
+  </include>
+</launch>

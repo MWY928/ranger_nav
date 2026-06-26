@@ -27,7 +27,7 @@ echo "Go2 D435 camera_info topic: $GO2_CAMERA_INFO_TOPIC"
 echo "AprilTag detections topic:  $TAG_DETECTIONS_TOPIC"
 echo "Polar output topic:         $POLAR_TOPIC"
 
-roslaunch ranger_nav linear_info.launch \
+roslaunch go_nav go2_detection_simple.launch \
   image_topic:="$GO2_IMAGE_TOPIC" \
   camera_info_topic:="$GO2_CAMERA_INFO_TOPIC" \
   detections_topic:="$TAG_DETECTIONS_TOPIC" \
