@@ -32,10 +32,11 @@ mkdir -p "$RESULTS_DIR"
 # - This script does not enable --replay_dump_enabled, so it does not save
 #   policy replay .npz/.json files.
 ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
+DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/depth/image_rect_raw}"
 
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm2.pth" \
-  --depth_topic /camera/aligned_depth_to_color/image_raw \
+  --depth_topic "$DEPTH_TOPIC" \
   --polar_topic /tag_polar \
   --action_topic "$ACTION_TOPIC" \
   --debug_mapping \
