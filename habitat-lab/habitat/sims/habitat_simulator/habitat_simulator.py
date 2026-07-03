@@ -420,6 +420,12 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
                     "sensor_subtype": lambda v: getattr(
                         habitat_sim.SensorSubType, v
                     ),
+                    "position": lambda v: mn.Vector3(
+                        *[float(x) for x in v]
+                    ),
+                    "orientation": lambda v: mn.Vector3(
+                        *[float(x) for x in v]
+                    ),
                 },
             )
             sim_sensor_cfg.uuid = sensor.uuid
