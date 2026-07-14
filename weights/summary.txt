@@ -1,0 +1,9 @@
+1. falcon_noaux_25.pth: A full-version Falcon model without auxiliary tasks. It is ready for direct inference deployment, requiring no additional fine-tuning.
+
+2. falcon_pretrained_25.pth: The original full-version Falcon model obtained from pre-training. Designed for further training (e.g., fine-tuning) on downstream tasks rather than direct inference.
+
+3. pretrained_habitat3.pth: A depth-based point navigation model pre-trained on the HM3D dataset. It serves as the foundational model for Falcon, which is derived through fine-tuning this base model.
+
+4. pretrained_mini.pth: A lightweight (mini-version) Falcon model without auxiliary tasks. Optimized for efficient deployment and ready for direct inference use.
+
+For inference, corresponding config key is `habitat_baselines.eval_ckpt_path_dir`. For training, corresponding config key is `habitat_baselines.rl.ddppo.pretrained_weights`.

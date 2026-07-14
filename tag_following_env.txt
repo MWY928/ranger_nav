@@ -1,0 +1,10 @@
+python=3.9
+numpy
+pyrealsense2
+opencv
+empy
+catkin_pkg
+rospkg
+pyyaml
+defusedxml
+netifaces

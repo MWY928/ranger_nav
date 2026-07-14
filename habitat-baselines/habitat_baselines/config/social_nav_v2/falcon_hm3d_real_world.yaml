@@ -1,0 +1,33 @@
+# @package _global_
+
+defaults:
+  - falcon_hm3d
+  - override /benchmark/nav/socialnav_v2: falcon_hm3d_real_world_task
+  - override /habitat/task/lab_sensors@habitat.task.lab_sensors.agent_0_pointgoal_with_gps_compass: noisy_pointgoal_with_gps_compass_sensor
+  - _self_
+
+habitat:
+  task:
+    actions:
+      agent_0_discrete_stop:
+        lin_speed: 0.0
+        ang_speed: 0.0
+      agent_0_discrete_move_forward:
+        lin_speed: 2.0
+        ang_speed: 0.0
+        allow_dyn_slide: True
+      agent_0_discrete_turn_left:
+        lin_speed: 0.0
+        ang_speed: 2.0
+        allow_dyn_slide: True
+      agent_0_discrete_turn_right:
+        lin_speed: 0.0
+        ang_speed: -2.0
+        allow_dyn_slide: True
+    lab_sensors:
+      agent_0_pointgoal_with_gps_compass:
+        noise_enabled: true
+        sigma_r: 0.03
+        sigma_theta: 0.03490658503988659
+        drift_r_std: 0.002
+        drift_theta_std: 0.0017453292519943296

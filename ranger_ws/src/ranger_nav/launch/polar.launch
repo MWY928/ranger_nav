@@ -1,0 +1,11 @@
+<launch>
+  <node pkg="ranger_nav"
+        type="polar_distance.py"
+        name="tag_to_polar_node"
+        output="screen">
+    <param name="detections_topic" value="/tag_detections" />
+    <param name="output_topic" value="/tag_polar" />
+    <param name="target_tag_id" value="0" />
+    <param name="use_first_detection" value="false" />
+  </node>
+</launch>
