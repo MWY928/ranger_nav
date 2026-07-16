@@ -752,7 +752,10 @@ class FALCONEvaluator(Evaluator):
                     "index_len_prev_actions": action_space_lens,
                 }
             sim_action_probs = None
-            if config.habitat_baselines.eval.real_obs_replay_enabled:
+            if (
+                config.habitat_baselines.eval.real_obs_replay_enabled
+                or diagnostic_step_handle is not None
+            ):
                 sim_action_probs = self._compute_agent0_action_probs(
                     agent,
                     batch,
@@ -881,6 +884,18 @@ class FALCONEvaluator(Evaluator):
                     ],
                 )
                 action_debug = self._action_debug(step_data[i])
+                action_probs = (
+                    sim_action_probs[i]
+                    if sim_action_probs is not None and i < len(sim_action_probs)
+                    else None
+                )
+                selected_action_prob = None
+                stop_prob = None
+                if action_probs is not None:
+                    stop_prob = action_probs[0] if len(action_probs) > 0 else None
+                    action_id = action_debug["agent_0_action_id"]
+                    if action_id is not None and action_id < len(action_probs):
+                        selected_action_prob = action_probs[action_id]
                 step_record = {
                     "event": "step",
                     "vector_step": diagnostic_vector_step,
@@ -905,6 +920,9 @@ class FALCONEvaluator(Evaluator):
                     "robot_debug_state": current_robot_states[i]
                     if i < len(current_robot_states)
                     else None,
+                    "agent_0_action_probs": action_probs,
+                    "agent_0_stop_prob": stop_prob,
+                    "agent_0_selected_action_prob": selected_action_prob,
                     **action_debug,
                     **self._robot_position_delta(
                         prev_robot_positions[i]
@@ -976,6 +994,18 @@ class FALCONEvaluator(Evaluator):
                     )
                     completed_eval_count = ep_eval_count[k] + 1
                     action_debug = self._action_debug(step_data[i])
+                    action_probs = (
+                        sim_action_probs[i]
+                        if sim_action_probs is not None and i < len(sim_action_probs)
+                        else None
+                    )
+                    selected_action_prob = None
+                    stop_prob = None
+                    if action_probs is not None:
+                        stop_prob = action_probs[0] if len(action_probs) > 0 else None
+                        action_id = action_debug["agent_0_action_id"]
+                        if action_id is not None and action_id < len(action_probs):
+                            selected_action_prob = action_probs[action_id]
                     done_record = {
                         "event": "done",
                         "vector_step": diagnostic_vector_step,
@@ -1002,6 +1032,9 @@ class FALCONEvaluator(Evaluator):
                         "success": self._info_float(infos[i], "success"),
                         "spl": self._info_float(infos[i], "spl"),
                         "num_steps": self._info_float(infos[i], "num_steps"),
+                        "agent_0_action_probs": action_probs,
+                        "agent_0_stop_prob": stop_prob,
+                        "agent_0_selected_action_prob": selected_action_prob,
                         **action_debug,
                     }
                     self._write_jsonl(
