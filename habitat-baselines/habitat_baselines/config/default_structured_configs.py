@@ -77,6 +77,13 @@ class EvalConfig(HabitatBaselinesBaseConfig):
     real_obs_replay_synthetic_goal_theta: float = 0.0
     # Output path for simulator actions under real observation replay.
     real_obs_replay_action_output: str = "output/real_obs_replay_actions.json"
+    # Debug option: write per-step and per-done eval diagnostics as JSONL.
+    diagnostic_trace_enabled: bool = False
+    diagnostic_trace_dir: str = "output/eval_diagnostics"
+    diagnostic_trace_step_output: str = "eval_step_trace.jsonl"
+    diagnostic_trace_done_output: str = "eval_done_trace.jsonl"
+    diagnostic_trace_config_output: str = "eval_config_trace.json"
+    diagnostic_trace_flush: bool = True
     extra_sim_sensors: Dict[str, SimulatorSensorConfig] = field(
         default_factory=dict
     )
