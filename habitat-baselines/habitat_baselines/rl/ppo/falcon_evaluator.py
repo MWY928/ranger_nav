@@ -2,7 +2,7 @@ import os
 import time
 import glob
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -472,13 +472,23 @@ class FALCONEvaluator(Evaluator):
         cls,
         prev_pos: Optional[np.ndarray],
         cur_pos: Optional[np.ndarray],
+        invalid: bool = False,
     ) -> Dict[str, Any]:
+        if invalid:
+            return {
+                "robot_pos_prev": cls._json_ready(prev_pos),
+                "robot_pos": cls._json_ready(cur_pos),
+                "robot_pos_delta": None,
+                "robot_pos_delta_norm": None,
+                "robot_pos_delta_valid": False,
+            }
         if prev_pos is None or cur_pos is None:
             return {
                 "robot_pos_prev": cls._json_ready(prev_pos),
                 "robot_pos": cls._json_ready(cur_pos),
                 "robot_pos_delta": None,
                 "robot_pos_delta_norm": None,
+                "robot_pos_delta_valid": False,
             }
         delta = cur_pos - prev_pos
         return {
@@ -486,7 +496,59 @@ class FALCONEvaluator(Evaluator):
             "robot_pos": cls._json_ready(cur_pos),
             "robot_pos_delta": cls._json_ready(delta),
             "robot_pos_delta_norm": float(np.linalg.norm(delta)),
+            "robot_pos_delta_valid": True,
         }
+
+    @classmethod
+    def _extract_robot_position_from_debug_state(
+        cls,
+        state: Optional[Dict[str, Any]],
+    ) -> Optional[np.ndarray]:
+        if not isinstance(state, dict):
+            return None
+        for key in ("articulated_base_pos", "agent_state_position"):
+            if key not in state:
+                continue
+            try:
+                pos = np.asarray(state[key], dtype=np.float64).reshape(-1)
+            except (TypeError, ValueError):
+                continue
+            if pos.size >= 3:
+                return pos[:3].copy()
+        return None
+
+    def _get_robot_positions(
+        self,
+        envs,
+        observations,
+        use_sim_state: bool,
+    ) -> Tuple[List[Optional[np.ndarray]], List[Optional[Dict[str, Any]]], str]:
+        if use_sim_state and envs.num_envs > 0:
+            try:
+                states = envs.call(
+                    ["get_agent_debug_state"] * envs.num_envs,
+                    [{"agent_id": 0} for _ in range(envs.num_envs)],
+                )
+                return (
+                    [
+                        self._extract_robot_position_from_debug_state(state)
+                        for state in states
+                    ],
+                    states,
+                    "sim_debug_state",
+                )
+            except Exception as err:
+                logger.warn(
+                    "[EvalDiagnostics] Failed to read sim debug state: {}".format(
+                        err
+                    )
+                )
+
+        return (
+            [self._extract_robot_position(obs) for obs in observations],
+            [None for _ in range(len(observations))],
+            "observation",
+        )
 
     @classmethod
     def _agent0_action_name(cls, action_id: Optional[int]) -> Optional[str]:
@@ -589,9 +651,15 @@ class FALCONEvaluator(Evaluator):
         observations = envs.post_step(observations)
         observations = self._apply_real_obs_replay(observations, config)
         self._dump_depth_sample_once(observations, config)
-        prev_robot_positions = [
-            self._extract_robot_position(obs) for obs in observations
-        ]
+        (
+            prev_robot_positions,
+            _prev_robot_states,
+            robot_state_source,
+        ) = self._get_robot_positions(
+            envs,
+            observations,
+            diagnostic_step_handle is not None,
+        )
         batch = batch_obs(observations, device=device)
         batch = apply_obs_transforms_batch(batch, obs_transforms)  
 
@@ -779,9 +847,15 @@ class FALCONEvaluator(Evaluator):
 
             observations = envs.post_step(observations)
             observations = self._apply_real_obs_replay(observations, config)
-            current_robot_positions = [
-                self._extract_robot_position(obs) for obs in observations
-            ]
+            (
+                current_robot_positions,
+                current_robot_states,
+                robot_state_source,
+            ) = self._get_robot_positions(
+                envs,
+                observations,
+                diagnostic_step_handle is not None,
+            )
             batch = batch_obs(  # type: ignore
                 observations,
                 device=device,
@@ -827,12 +901,17 @@ class FALCONEvaluator(Evaluator):
                     "success": self._info_float(infos[i], "success"),
                     "spl": self._info_float(infos[i], "spl"),
                     "num_steps": self._info_float(infos[i], "num_steps"),
+                    "robot_state_source": robot_state_source,
+                    "robot_debug_state": current_robot_states[i]
+                    if i < len(current_robot_states)
+                    else None,
                     **action_debug,
                     **self._robot_position_delta(
                         prev_robot_positions[i]
                         if i < len(prev_robot_positions)
                         else None,
                         current_robot_positions[i],
+                        invalid=bool(dones[i]),
                     ),
                 }
                 self._write_jsonl(

@@ -219,6 +219,37 @@ class Env:
     def get_metrics(self) -> Metrics:
         return self._task.measurements.get_metrics()
 
+    def get_agent_debug_state(self, agent_id: int = 0) -> Dict[str, Any]:
+        state: Dict[str, Any] = {}
+        try:
+            agent_state = self._sim.get_agent_state(agent_id)
+            state["agent_state_position"] = np.asarray(
+                agent_state.position, dtype=np.float32
+            ).tolist()
+        except Exception as err:
+            state["agent_state_position_error"] = str(err)
+
+        try:
+            agent_state = self._sim.get_agent_state(agent_id)
+            state["agent_state_rotation"] = np.asarray(
+                agent_state.rotation, dtype=np.float32
+            ).tolist()
+        except Exception as err:
+            state["agent_state_rotation_error"] = str(err)
+
+        try:
+            articulated_agent = self._sim.get_agent_data(
+                agent_id
+            ).articulated_agent
+            state["articulated_base_pos"] = np.asarray(
+                articulated_agent.base_pos, dtype=np.float32
+            ).tolist()
+            state["articulated_base_rot"] = float(articulated_agent.base_rot)
+        except Exception as err:
+            state["articulated_agent_error"] = str(err)
+
+        return state
+
     def _past_limit(self) -> bool:
         return (
             self._max_episode_steps != 0
