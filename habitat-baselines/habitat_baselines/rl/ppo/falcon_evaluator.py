@@ -36,6 +36,14 @@ class FALCONEvaluator(Evaluator):
     Only difference is record the success rate of each episode while evaluating.
     Similar to ORCAEvaluator.
     """
+
+    AGENT0_DISCRETE_ACTION_NAMES = [
+        "agent_0_discrete_stop",
+        "agent_0_discrete_move_forward",
+        "agent_0_discrete_turn_left",
+        "agent_0_discrete_turn_right",
+    ]
+
     @staticmethod
     def _depth_stats(arr: np.ndarray) -> Dict[str, float]:
         arr_f = arr.astype(np.float32, copy=False)
@@ -406,6 +414,156 @@ class FALCONEvaluator(Evaluator):
             logger.warn("[RealObsReplay] Failed to compute sim action probs: {}".format(e))
             return None
 
+    @classmethod
+    def _json_ready(cls, value):
+        if torch.is_tensor(value):
+            value = value.detach().cpu()
+            if value.numel() == 1:
+                return cls._json_ready(value.item())
+            return cls._json_ready(value.numpy())
+        if isinstance(value, np.ndarray):
+            return cls._json_ready(value.tolist())
+        if isinstance(value, np.generic):
+            return cls._json_ready(value.item())
+        if isinstance(value, float):
+            return value if np.isfinite(value) else None
+        if isinstance(value, (str, int, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            return {str(k): cls._json_ready(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._json_ready(v) for v in value]
+        return str(value)
+
+    @classmethod
+    def _float_or_none(cls, value) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            arr = np.asarray(cls._json_ready(value), dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if arr.size == 0 or not np.isfinite(arr[0]):
+            return None
+        return float(arr[0])
+
+    @classmethod
+    def _info_float(cls, info: Dict[str, Any], key: str) -> Optional[float]:
+        return cls._float_or_none(info.get(key))
+
+    @classmethod
+    def _extract_robot_position(
+        cls,
+        observation: Dict[str, Any],
+        key: str = "agent_0_localization_sensor",
+    ) -> Optional[np.ndarray]:
+        if not isinstance(observation, dict) or key not in observation:
+            return None
+        try:
+            pos = np.asarray(observation[key], dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if pos.size < 3:
+            return None
+        return pos[:3].copy()
+
+    @classmethod
+    def _robot_position_delta(
+        cls,
+        prev_pos: Optional[np.ndarray],
+        cur_pos: Optional[np.ndarray],
+    ) -> Dict[str, Any]:
+        if prev_pos is None or cur_pos is None:
+            return {
+                "robot_pos_prev": cls._json_ready(prev_pos),
+                "robot_pos": cls._json_ready(cur_pos),
+                "robot_pos_delta": None,
+                "robot_pos_delta_norm": None,
+            }
+        delta = cur_pos - prev_pos
+        return {
+            "robot_pos_prev": cls._json_ready(prev_pos),
+            "robot_pos": cls._json_ready(cur_pos),
+            "robot_pos_delta": cls._json_ready(delta),
+            "robot_pos_delta_norm": float(np.linalg.norm(delta)),
+        }
+
+    @classmethod
+    def _agent0_action_name(cls, action_id: Optional[int]) -> Optional[str]:
+        if action_id is None:
+            return None
+        if 0 <= action_id < len(cls.AGENT0_DISCRETE_ACTION_NAMES):
+            return cls.AGENT0_DISCRETE_ACTION_NAMES[action_id]
+        return None
+
+    @classmethod
+    def _action_debug(cls, action_value) -> Dict[str, Any]:
+        action_json = cls._action_to_jsonable(action_value)
+        action_id = action_json["scalar"]
+        action_name = cls._agent0_action_name(action_id)
+        return {
+            "last_action": action_json,
+            "agent_0_action_id": action_id,
+            "agent_0_action_name": action_name,
+            "is_stop_called": action_name == "agent_0_discrete_stop",
+        }
+
+    @classmethod
+    def _write_jsonl(cls, handle, record: Dict[str, Any], flush: bool) -> None:
+        if handle is None:
+            return
+        handle.write(json.dumps(cls._json_ready(record), ensure_ascii=False) + "\n")
+        if flush:
+            handle.flush()
+
+    def _config_trace(self, config, checkpoint_index, step_id) -> Dict[str, Any]:
+        return {
+            "checkpoint_index": checkpoint_index,
+            "step_id": step_id,
+            "pretrained_weights": config.habitat_baselines.rl.ddppo.pretrained_weights,
+            "checkpoint_folder": config.habitat_baselines.checkpoint_folder,
+            "load_resume_state_config": config.habitat_baselines.load_resume_state_config,
+            "eval_ckpt_path_dir": config.habitat_baselines.eval_ckpt_path_dir,
+            "use_ckpt_config": config.habitat_baselines.eval.use_ckpt_config,
+            "should_load_ckpt": config.habitat_baselines.eval.should_load_ckpt,
+        }
+
+    def _log_config_trace(self, config, checkpoint_index, step_id) -> Dict[str, Any]:
+        trace = self._config_trace(config, checkpoint_index, step_id)
+        logger.info(
+            "[EvalConfigCheck] pretrained_weights={pretrained_weights} "
+            "checkpoint_folder={checkpoint_folder} "
+            "load_resume_state_config={load_resume_state_config} "
+            "eval_ckpt_path_dir={eval_ckpt_path_dir} "
+            "use_ckpt_config={use_ckpt_config} "
+            "should_load_ckpt={should_load_ckpt}".format(**trace)
+        )
+        return trace
+
+    def _open_diagnostic_trace_files(self, config, config_trace):
+        eval_cfg = config.habitat_baselines.eval
+        if not eval_cfg.diagnostic_trace_enabled:
+            return None, None
+
+        out_dir = eval_cfg.diagnostic_trace_dir
+        os.makedirs(out_dir, exist_ok=True)
+        config_path = os.path.join(out_dir, eval_cfg.diagnostic_trace_config_output)
+        step_path = os.path.join(out_dir, eval_cfg.diagnostic_trace_step_output)
+        done_path = os.path.join(out_dir, eval_cfg.diagnostic_trace_done_output)
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(self._json_ready(config_trace), f, indent=2, ensure_ascii=False)
+
+        step_handle = open(step_path, "w", encoding="utf-8")
+        done_handle = open(done_path, "w", encoding="utf-8")
+        logger.info(
+            "[EvalDiagnostics] Writing step trace to {} and done trace to {}".format(
+                step_path,
+                done_path,
+            )
+        )
+        return step_handle, done_handle
+
     def evaluate_agent(
         self,
         agent,
@@ -419,6 +577,11 @@ class FALCONEvaluator(Evaluator):
         env_spec,
         rank0_keys,
     ):
+        config_trace = self._log_config_trace(config, checkpoint_index, step_id)
+        diagnostic_step_handle, diagnostic_done_handle = (
+            self._open_diagnostic_trace_files(config, config_trace)
+        )
+        diagnostic_flush = config.habitat_baselines.eval.diagnostic_trace_flush
         self._depth_sample_dumped = False
         self._load_real_obs_replay_samples(config)
         success_cal = 0 ## my added
@@ -426,6 +589,9 @@ class FALCONEvaluator(Evaluator):
         observations = envs.post_step(observations)
         observations = self._apply_real_obs_replay(observations, config)
         self._dump_depth_sample_once(observations, config)
+        prev_robot_positions = [
+            self._extract_robot_position(obs) for obs in observations
+        ]
         batch = batch_obs(observations, device=device)
         batch = apply_obs_transforms_batch(batch, obs_transforms)  
 
@@ -502,6 +668,7 @@ class FALCONEvaluator(Evaluator):
         pbar = tqdm.tqdm(total=number_of_eval_episodes * evals_per_ep)
         actions_record = defaultdict(list)
         real_obs_replay_action_records = []
+        diagnostic_vector_step = 0
         agent.eval()
         while (
             len(stats_episodes) < (number_of_eval_episodes * evals_per_ep)
@@ -572,6 +739,7 @@ class FALCONEvaluator(Evaluator):
             )
 
             outputs = envs.step(step_data)
+            diagnostic_vector_step += 1
 
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
@@ -611,6 +779,9 @@ class FALCONEvaluator(Evaluator):
 
             observations = envs.post_step(observations)
             observations = self._apply_real_obs_replay(observations, config)
+            current_robot_positions = [
+                self._extract_robot_position(obs) for obs in observations
+            ]
             batch = batch_obs(  # type: ignore
                 observations,
                 device=device,
@@ -627,6 +798,49 @@ class FALCONEvaluator(Evaluator):
                 rewards_l, dtype=torch.float, device="cpu"
             ).unsqueeze(1)
             current_episode_reward += rewards
+            for i in range(envs.num_envs):
+                episode_key = (
+                    current_episodes_info[i].scene_id,
+                    current_episodes_info[i].episode_id,
+                    ep_eval_count[
+                        (current_episodes_info[i].scene_id, current_episodes_info[i].episode_id)
+                    ],
+                )
+                action_debug = self._action_debug(step_data[i])
+                step_record = {
+                    "event": "step",
+                    "vector_step": diagnostic_vector_step,
+                    "env_index": i,
+                    "scene_id": current_episodes_info[i].scene_id,
+                    "episode_id": current_episodes_info[i].episode_id,
+                    "episode_eval_index": episode_key[2],
+                    "episode_step": len(actions_record[episode_key]),
+                    "done": bool(dones[i]),
+                    "done_observation_is_auto_reset": bool(dones[i]),
+                    "reward": self._float_or_none(rewards_l[i]),
+                    "episode_reward_so_far": float(current_episode_reward[i].item()),
+                    "distance_to_goal": self._info_float(infos[i], "distance_to_goal"),
+                    "distance_to_goal_reward": self._info_float(
+                        infos[i], "distance_to_goal_reward"
+                    ),
+                    "human_collision": self._info_float(infos[i], "human_collision"),
+                    "success": self._info_float(infos[i], "success"),
+                    "spl": self._info_float(infos[i], "spl"),
+                    "num_steps": self._info_float(infos[i], "num_steps"),
+                    **action_debug,
+                    **self._robot_position_delta(
+                        prev_robot_positions[i]
+                        if i < len(prev_robot_positions)
+                        else None,
+                        current_robot_positions[i],
+                    ),
+                }
+                self._write_jsonl(
+                    diagnostic_step_handle,
+                    step_record,
+                    diagnostic_flush,
+                )
+            prev_robot_positions = current_robot_positions
             next_episodes_info = envs.current_episodes()
             envs_to_pause = []
             n_envs = envs.num_envs
@@ -677,12 +891,47 @@ class FALCONEvaluator(Evaluator):
                         "reward": current_episode_reward[i].item()
                     }
                     episode_stats.update(extract_scalars_from_info(infos[i]))
-                    current_episode_reward[i] = 0
                     k = (
                         current_episodes_info[i].scene_id,
                         current_episodes_info[i].episode_id,
                     )
-                    ep_eval_count[k] += 1
+                    completed_eval_count = ep_eval_count[k] + 1
+                    action_debug = self._action_debug(step_data[i])
+                    done_record = {
+                        "event": "done",
+                        "vector_step": diagnostic_vector_step,
+                        "env_index": i,
+                        "scene_id": current_episodes_info[i].scene_id,
+                        "episode_id": current_episodes_info[i].episode_id,
+                        "episode_eval_count_completed": completed_eval_count,
+                        "last_episode_step": len(
+                            actions_record[
+                                (
+                                    current_episodes_info[i].scene_id,
+                                    current_episodes_info[i].episode_id,
+                                    ep_eval_count[k],
+                                )
+                            ]
+                        ),
+                        "reward": episode_stats["reward"],
+                        "last_step_reward": self._float_or_none(rewards_l[i]),
+                        "distance_to_goal": self._info_float(infos[i], "distance_to_goal"),
+                        "distance_to_goal_reward": self._info_float(
+                            infos[i], "distance_to_goal_reward"
+                        ),
+                        "human_collision": self._info_float(infos[i], "human_collision"),
+                        "success": self._info_float(infos[i], "success"),
+                        "spl": self._info_float(infos[i], "spl"),
+                        "num_steps": self._info_float(infos[i], "num_steps"),
+                        **action_debug,
+                    }
+                    self._write_jsonl(
+                        diagnostic_done_handle,
+                        done_record,
+                        diagnostic_flush,
+                    )
+                    current_episode_reward[i] = 0
+                    ep_eval_count[k] = completed_eval_count
                     # use scene_id + episode_id as unique id for storing stats
                     stats_episodes[(k, ep_eval_count[k])] = episode_stats
 
@@ -735,6 +984,13 @@ class FALCONEvaluator(Evaluator):
                 batch,
                 rgb_frames,
             )
+            if any(envs_to_pause):
+                paused = set(envs_to_pause)
+                prev_robot_positions = [
+                    pos
+                    for env_idx, pos in enumerate(prev_robot_positions)
+                    if env_idx not in paused
+                ]
 
             # We pause the statefull parameters in the policy.
             # We only do this if there are envs to pause to reduce the overhead.
@@ -801,3 +1057,6 @@ class FALCONEvaluator(Evaluator):
             real_obs_replay_action_records,
             config,
         )
+        for diagnostic_handle in (diagnostic_step_handle, diagnostic_done_handle):
+            if diagnostic_handle is not None:
+                diagnostic_handle.close()
