@@ -15,10 +15,12 @@ RUN_NAME="${RUN_NAME:-hm3d_real_world_lowmem_jaw_depth_only_eval}"
 VIDEO_DIR="${VIDEO_DIR:-evaluation/falcon/${RUN_NAME}/video_n_human_draw}"
 TENSORBOARD_DIR="${TENSORBOARD_DIR:-training/falcon/${RUN_NAME}/tb}"
 EVAL_STATE_DIR="${EVAL_STATE_DIR:-evaluation/falcon/${RUN_NAME}/checkpoints}"
+DIAGNOSTIC_TRACE_ENABLED="${DIAGNOSTIC_TRACE_ENABLED:-true}"
+DIAGNOSTIC_TRACE_DIR="${DIAGNOSTIC_TRACE_DIR:-output/eval_diagnostics/${RUN_NAME}}"
 
 if [ ! -e "$CKPT_PATH" ]; then
   echo "Checkpoint not found: $CKPT_PATH" >&2
-  echo "Usage: $0 /path/to/checkpoint.pth" >&2
+  echo "Usage: $0 /path/to/checkpoint.pth [hydra overrides...]" >&2
   exit 1
 fi
 
@@ -26,6 +28,8 @@ echo "Evaluating checkpoint: $CKPT_PATH"
 echo "Test episodes: $TEST_EPISODE_COUNT"
 echo "Num environments: $NUM_ENVIRONMENTS"
 echo "Video output dir: $VIDEO_DIR"
+echo "Diagnostic trace enabled: $DIAGNOSTIC_TRACE_ENABLED"
+echo "Diagnostic trace dir: $DIAGNOSTIC_TRACE_DIR"
 
 python -m habitat_baselines.run \
   --config-name social_nav_v2/falcon_hm3d_real_world_aux_eval \
@@ -37,6 +41,8 @@ python -m habitat_baselines.run \
   habitat_baselines.tensorboard_dir="$TENSORBOARD_DIR" \
   habitat_baselines.video_dir="$VIDEO_DIR" \
   habitat_baselines.eval.video_option='["disk"]' \
+  habitat_baselines.eval.diagnostic_trace_enabled="$DIAGNOSTIC_TRACE_ENABLED" \
+  habitat_baselines.eval.diagnostic_trace_dir="$DIAGNOSTIC_TRACE_DIR" \
   habitat.simulator.should_setup_semantic_ids=False \
   '~habitat.simulator.agents.agent_0.sim_sensors.head_rgb_sensor' \
   '~habitat.simulator.agents.agent_0.sim_sensors.head_depth_sensor' \
