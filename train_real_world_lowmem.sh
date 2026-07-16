@@ -14,5 +14,5 @@ python -m habitat_baselines.run \
   --config-name social_nav_v2/falcon_hm3d_real_world_train_lowmem \
   habitat_baselines.total_num_steps="$TOTAL_NUM_STEPS" \
   '~habitat.simulator.agents.agent_0.sim_sensors.arm_panoptic_sensor' \
-  '~habitat.simulator.agents.agent_0.sim_sensors.jaw_panoptic_sensor' 
+  '~habitat.simulator.agents.agent_0.sim_sensors.jaw_panoptic_sensor' \
   "$@"

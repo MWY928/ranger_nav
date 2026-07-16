@@ -2,7 +2,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 from gym import Env, Wrapper, spaces
 from gym.core import ActType, ObsType
@@ -54,6 +54,13 @@ class EnvCountEpisodeWrapper(Wrapper):
         if done:
             self._current_episode += 1
         return o, r, done, i
+
+    def get_agent_debug_state(self, agent_id: int = 0) -> Dict[str, Any]:
+        if hasattr(self.env, "get_agent_debug_state"):
+            return self.env.get_agent_debug_state(agent_id=agent_id)
+        if hasattr(self.env, "habitat_env"):
+            return self.env.habitat_env.get_agent_debug_state(agent_id=agent_id)
+        raise AttributeError("Wrapped env does not expose get_agent_debug_state")
 
     def reset(self, **kwargs) -> Union[ObsType, Tuple[ObsType, dict]]:
         """Resets the environment with kwargs."""
