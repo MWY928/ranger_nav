@@ -43,14 +43,21 @@ class DiscreteStopAction(BaseVelAction):
         assert os.path.exists(self._checkpoint) == 1
         self._leg_data = {}  # type: ignore
         kwargs['task'].is_stop_called = False
+        kwargs['task'].is_pause_called = False
         
     @property
     def action_space(self):
         return EmptySpace()
     
     def step(self, *args, **kwargs):
-        kwargs['task'].is_stop_called = True  
-        kwargs['task'].should_end = True  # let episode terminate when call stop, might accelerate training
+        if self._config.get("stop_ends_episode", True):
+            kwargs['task'].is_stop_called = True
+            kwargs['task'].is_pause_called = False
+            kwargs['task'].should_end = True  # let episode terminate when call stop, might accelerate training
+        else:
+            kwargs['task'].is_stop_called = False
+            kwargs['task'].is_pause_called = True
+            kwargs['task'].should_end = False
         self.base_vel_ctrl.linear_velocity = mn.Vector3(0.0, 0, 0)
         self.base_vel_ctrl.angular_velocity = mn.Vector3(0, 0.0, 0)
 
@@ -63,6 +70,7 @@ class DiscretePauseAction(BaseVelAction):
         assert os.path.exists(self._checkpoint) == 1
         self._leg_data = {}  # type: ignore
         kwargs['task'].is_stop_called = False
+        kwargs['task'].is_pause_called = False
         
     @property
     def action_space(self):
@@ -70,6 +78,7 @@ class DiscretePauseAction(BaseVelAction):
     
     def step(self, *args, **kwargs):
         kwargs['task'].is_stop_called = False
+        kwargs['task'].is_pause_called = True
         kwargs['task'].should_end = False
         self.base_vel_ctrl.linear_velocity = mn.Vector3(0.0, 0, 0)
         self.base_vel_ctrl.angular_velocity = mn.Vector3(0, 0.0, 0)
@@ -112,6 +121,7 @@ class DiscreteMoveForwardAction(BaseVelAction):
     
     def step(self, *args, **kwargs):
         global play_i
+        kwargs['task'].is_pause_called = False
         lin_vel = self.lin_vel
         ang_vel = self.ang_vel
 
@@ -170,6 +180,7 @@ class DiscreteMoveBackwardAction(BaseVelAction):
 
     def step(self, *args, **kwargs):
         global play_i
+        kwargs['task'].is_pause_called = False
 
         lin_vel = -self.lin_vel 
         ang_vel = self.ang_vel  
@@ -199,6 +210,7 @@ class DiscreteTurnLeftAction(BaseVelAction):
         return EmptySpace()
     
     def step(self, *args, **kwargs):
+        kwargs['task'].is_pause_called = False
         lin_vel = self.lin_vel
         ang_vel = self.ang_vel
 
@@ -217,6 +229,7 @@ class DiscreteTurnRightAction(BaseVelAction):
         return EmptySpace()
     
     def step(self, *args, **kwargs):
+        kwargs['task'].is_pause_called = False
         lin_vel = self.lin_vel
         ang_vel = self.ang_vel
 
@@ -984,6 +997,7 @@ class DiscreteStopActionConfig(ActionConfig):
     type: str = "DiscreteStopAction"
     lin_speed: float = 0.0
     ang_speed: float = 0.0 
+    stop_ends_episode: bool = True
     allow_back: bool = False
     value: int = 1
     allow_dyn_slide: bool = False # True

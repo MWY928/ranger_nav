@@ -227,8 +227,25 @@ class MultiAgentNavReward(Measure):
         self._robot_idx = config.robot_idx
         self._close_to_human_penalty = config.close_to_human_penalty
         self._facing_human_dis = config.facing_human_dis
+        self._far_stop_penalty_enabled = config.far_stop_penalty_enabled
+        self._far_stop_penalty = config.far_stop_penalty
+        self._far_stop_distance_threshold = config.far_stop_distance_threshold
+        self._pause_mode_enabled = config.pause_mode_enabled
+        self._pause_grace_steps = config.pause_grace_steps
+        self._pause_max_steps = config.pause_max_steps
+        self._pause_step_penalty = config.pause_step_penalty
+        self._pause_done_penalty = config.pause_done_penalty
+        self._no_progress_enabled = config.no_progress_enabled
+        self._no_progress_window = config.no_progress_window
+        self._no_progress_move_eps = config.no_progress_move_eps
+        self._no_progress_distance_eps = config.no_progress_distance_eps
+        self._no_progress_done_penalty = config.no_progress_done_penalty
 
         self._human_nums = 0
+        self._consecutive_pause_steps = 0
+        self._no_progress_steps = 0
+        self._last_robot_pos = None
+        self._last_distance_to_target = None
 
     def reset_metric(self, *args, episode, task, observations, **kwargs):
         if "human_num" in episode.info:
@@ -236,6 +253,20 @@ class MultiAgentNavReward(Measure):
         else: 
             self._human_nums = 0
         self._metric = 0.0
+        self._consecutive_pause_steps = 0
+        self._no_progress_steps = 0
+        use_k_robot = f"agent_{self._robot_idx}_localization_sensor"
+        self._last_robot_pos = (
+            np.array(observations[use_k_robot][:3])
+            if use_k_robot in observations
+            else None
+        )
+        try:
+            self._last_distance_to_target = task.measurements.measures[
+                DistanceToGoal.cls_uuid
+            ].get_metric()
+        except KeyError:
+            self._last_distance_to_target = None
         
     def _check_human_facing_robot(self, human_pos, robot_pos, human_idx):
         base_T = self._sim.get_agent_data(
@@ -314,6 +345,60 @@ class MultiAgentNavReward(Measure):
                     if np.sum((robot_pos - point) ** 2) < self._threshold_squared:
                         social_nav_reward += self._trajectory_cover_penalty * time_weight
                         break
+
+        if self._far_stop_penalty_enabled and getattr(task, "is_stop_called", False):
+            stop_distance_threshold = (
+                self._far_stop_distance_threshold
+                if self._far_stop_distance_threshold > 0.0
+                else self._allow_distance
+            )
+            if distance_to_target > stop_distance_threshold:
+                social_nav_reward += self._far_stop_penalty
+
+        if self._pause_mode_enabled:
+            is_pause_called = bool(getattr(task, "is_pause_called", False))
+            if is_pause_called:
+                self._consecutive_pause_steps += 1
+            else:
+                self._consecutive_pause_steps = 0
+
+            if (
+                self._pause_max_steps > 0
+                and self._consecutive_pause_steps >= self._pause_max_steps
+            ):
+                social_nav_reward += self._pause_done_penalty
+                task.should_end = True
+            elif self._consecutive_pause_steps > self._pause_grace_steps:
+                social_nav_reward += self._pause_step_penalty
+
+            if self._no_progress_enabled:
+                if is_pause_called:
+                    self._no_progress_steps = 0
+                elif (
+                    self._last_robot_pos is not None
+                    and self._last_distance_to_target is not None
+                ):
+                    robot_pos_delta = float(np.linalg.norm(robot_pos - self._last_robot_pos))
+                    distance_progress = float(
+                        self._last_distance_to_target - distance_to_target
+                    )
+                    if (
+                        robot_pos_delta < self._no_progress_move_eps
+                        and distance_progress < self._no_progress_distance_eps
+                    ):
+                        self._no_progress_steps += 1
+                    else:
+                        self._no_progress_steps = 0
+
+                    if (
+                        self._no_progress_window > 0
+                        and self._no_progress_steps >= self._no_progress_window
+                    ):
+                        social_nav_reward += self._no_progress_done_penalty
+                        task.should_end = True
+
+            self._last_robot_pos = np.array(robot_pos, copy=True)
+            self._last_distance_to_target = float(distance_to_target)
 
         self._metric = social_nav_reward
 
@@ -507,6 +592,24 @@ class MultiAgentNavReward(MeasurementConfig):
     cover_future_dis_thre: float = -0.05  
     # Set the id of the agent
     robot_idx: int = 0
+    # Optional real-world adaptation switch. When enabled, terminal STOP far
+    # from the goal is penalized while preserving the original STOP semantics.
+    far_stop_penalty_enabled: bool = False
+    far_stop_penalty: float = -0.25
+    far_stop_distance_threshold: float = -1.0
+    # Optional mode for real-world adaptation with a 4-action policy head:
+    # action id 0 can be treated as pause/wait by DiscreteStopAction, while
+    # this reward handles long pauses and no-progress failures.
+    pause_mode_enabled: bool = False
+    pause_grace_steps: int = 60
+    pause_max_steps: int = 180
+    pause_step_penalty: float = -0.002
+    pause_done_penalty: float = -0.25
+    no_progress_enabled: bool = False
+    no_progress_window: int = 120
+    no_progress_move_eps: float = 0.005
+    no_progress_distance_eps: float = 0.01
+    no_progress_done_penalty: float = -0.25
 
 @dataclass
 class DidMultiAgentsCollideConfig(MeasurementConfig):

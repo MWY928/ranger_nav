@@ -736,9 +736,12 @@ class SuccessMeasurementConfig(MeasurementConfig):
     Measure is smaller than `success_distance`.
 
     :property success_distance: The minimal distance the robot must be to the goal for a success.
+    :property auto_success_on_reach: If true, success is based only on reaching
+        success_distance and does not require StopAction.
     """
     type: str = "Success"
     success_distance: float = 0.2
+    auto_success_on_reach: bool = False
 
 
 @dataclass

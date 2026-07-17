@@ -558,16 +558,40 @@ class FALCONEvaluator(Evaluator):
             return cls.AGENT0_DISCRETE_ACTION_NAMES[action_id]
         return None
 
+    @staticmethod
+    def _config_value(config, path: str, default=None):
+        cur = config
+        try:
+            for key in path.split("."):
+                cur = getattr(cur, key)
+            return cur
+        except Exception:
+            return default
+
     @classmethod
-    def _action_debug(cls, action_value) -> Dict[str, Any]:
+    def _action_debug(cls, action_value, config=None) -> Dict[str, Any]:
         action_json = cls._action_to_jsonable(action_value)
         action_id = action_json["scalar"]
         action_name = cls._agent0_action_name(action_id)
+        stop_ends_episode = True
+        if config is not None:
+            stop_ends_episode = bool(
+                cls._config_value(
+                    config,
+                    "habitat.task.actions.agent_0_discrete_stop.stop_ends_episode",
+                    True,
+                )
+            )
         return {
             "last_action": action_json,
             "agent_0_action_id": action_id,
             "agent_0_action_name": action_name,
-            "is_stop_called": action_name == "agent_0_discrete_stop",
+            "is_stop_called": (
+                action_name == "agent_0_discrete_stop" and stop_ends_episode
+            ),
+            "is_pause_called": (
+                action_name == "agent_0_discrete_stop" and not stop_ends_episode
+            ),
         }
 
     @classmethod
@@ -588,6 +612,41 @@ class FALCONEvaluator(Evaluator):
             "eval_ckpt_path_dir": config.habitat_baselines.eval_ckpt_path_dir,
             "use_ckpt_config": config.habitat_baselines.eval.use_ckpt_config,
             "should_load_ckpt": config.habitat_baselines.eval.should_load_ckpt,
+            "stop_ends_episode": self._config_value(
+                config,
+                "habitat.task.actions.agent_0_discrete_stop.stop_ends_episode",
+                True,
+            ),
+            "auto_success_on_reach": self._config_value(
+                config,
+                "habitat.task.measurements.success.auto_success_on_reach",
+                False,
+            ),
+            "pause_mode_enabled": self._config_value(
+                config,
+                "habitat.task.measurements.multi_agent_nav_reward.pause_mode_enabled",
+                False,
+            ),
+            "pause_grace_steps": self._config_value(
+                config,
+                "habitat.task.measurements.multi_agent_nav_reward.pause_grace_steps",
+                None,
+            ),
+            "pause_max_steps": self._config_value(
+                config,
+                "habitat.task.measurements.multi_agent_nav_reward.pause_max_steps",
+                None,
+            ),
+            "no_progress_enabled": self._config_value(
+                config,
+                "habitat.task.measurements.multi_agent_nav_reward.no_progress_enabled",
+                False,
+            ),
+            "no_progress_window": self._config_value(
+                config,
+                "habitat.task.measurements.multi_agent_nav_reward.no_progress_window",
+                None,
+            ),
         }
 
     def _log_config_trace(self, config, checkpoint_index, step_id) -> Dict[str, Any]:
@@ -883,7 +942,7 @@ class FALCONEvaluator(Evaluator):
                         (current_episodes_info[i].scene_id, current_episodes_info[i].episode_id)
                     ],
                 )
-                action_debug = self._action_debug(step_data[i])
+                action_debug = self._action_debug(step_data[i], config)
                 action_probs = (
                     sim_action_probs[i]
                     if sim_action_probs is not None and i < len(sim_action_probs)
@@ -993,7 +1052,7 @@ class FALCONEvaluator(Evaluator):
                         current_episodes_info[i].episode_id,
                     )
                     completed_eval_count = ep_eval_count[k] + 1
-                    action_debug = self._action_debug(step_data[i])
+                    action_debug = self._action_debug(step_data[i], config)
                     action_probs = (
                         sim_action_probs[i]
                         if sim_action_probs is not None and i < len(sim_action_probs)
