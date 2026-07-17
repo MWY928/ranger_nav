@@ -33,19 +33,27 @@ Original Falcon train config uses faster robot actions:
 - turn left angular speed: `6.0`
 - turn right angular speed: `-6.0`
 
-Real-world train config changes these to:
+Real-world train config changes robot actions to:
 
 - move forward linear speed: `1.0`
 - turn left angular speed: `1.0`
 - turn right angular speed: `-1.0`
 
-Real-world eval config uses:
+Real-world train also overrides human oracle actions to match the robot speed:
+
+- human linear speed: `1.0`
+- human angular speed: `1.0`
+
+Real-world eval config changes robot actions to:
 
 - move forward linear speed: `2.0`
 - turn left angular speed: `2.0`
 - turn right angular speed: `-2.0`
 
-The human oracle actions still inherit high-speed settings from the base train config unless explicitly overridden.
+Real-world eval also overrides human oracle actions to match the eval robot speed:
+
+- human linear speed: `2.0`
+- human angular speed: `2.0`
 
 ## Robot Body / Agent Setup
 
@@ -203,7 +211,7 @@ Success is based on reaching `success_distance`, and failure can be triggered by
 
 ## Current Open Questions
 
-- Whether human oracle speed should be lowered to match the slower real-world robot.
+- Whether the matched robot/human speed should be increased together after the first controlled run.
 - Whether robot radius `0.5` is too conservative for the deployed body footprint.
 - Whether train/eval observation keys should be aligned more strictly.
 - Whether final deployment should move to a 5-action policy with separate terminal DONE and non-terminal PAUSE.

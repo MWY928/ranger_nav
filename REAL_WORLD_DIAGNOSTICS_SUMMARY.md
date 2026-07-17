@@ -50,7 +50,7 @@ Date: 2026-07-17
 2. 速度分布变化
    - 原 Falcon 训练里机器人速度较快。
    - real-world train 配置中机器人速度降到 `1.0`，eval 中为 `2.0`。
-   - 人类 oracle 速度仍继承较高速度，可能让机器人更容易采取保守策略。
+   - 目前已把 real-world train 中人类 oracle 速度也降到 `1.0`，eval 中降到 `2.0`，先消除“人比机器人快很多”的变量。
 
 3. 机器人本体与碰撞模型
    - real-world task 中 agent radius 为 `0.5`。

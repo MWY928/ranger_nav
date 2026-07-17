@@ -24,6 +24,24 @@ habitat:
         lin_speed: 0.0
         ang_speed: -2.0
         allow_dyn_slide: True
+      agent_1_oracle_nav_randcoord_action_obstacle:
+        lin_speed: 2.0
+        ang_speed: 2.0
+      agent_2_oracle_nav_randcoord_action_obstacle:
+        lin_speed: 2.0
+        ang_speed: 2.0
+      agent_3_oracle_nav_randcoord_action_obstacle:
+        lin_speed: 2.0
+        ang_speed: 2.0
+      agent_4_oracle_nav_randcoord_action_obstacle:
+        lin_speed: 2.0
+        ang_speed: 2.0
+      agent_5_oracle_nav_randcoord_action_obstacle:
+        lin_speed: 2.0
+        ang_speed: 2.0
+      agent_6_oracle_nav_randcoord_action_obstacle:
+        lin_speed: 2.0
+        ang_speed: 2.0
     lab_sensors:
       agent_0_pointgoal_with_gps_compass:
         noise_enabled: true
