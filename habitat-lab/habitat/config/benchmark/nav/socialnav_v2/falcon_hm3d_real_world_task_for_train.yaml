@@ -30,7 +30,7 @@ habitat:
       - agent_6
     agents:
       agent_0:
-        radius: 0.5
+        radius: 0.4
         sim_sensors:
           jaw_depth_sensor:
             height: 256
