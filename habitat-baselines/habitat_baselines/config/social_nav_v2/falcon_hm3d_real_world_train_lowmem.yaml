@@ -8,7 +8,7 @@ habitat_baselines:
   num_environments: 4
   tensorboard_dir: "training/falcon/hm3d_real_world_lowmem/tb"
   video_dir: "evaluation/falcon/hm3d_real_world_lowmem/video"
-  checkpoint_folder: "evaluation/falcon/hm3d_real_world_lowmem/checkpoints"
+  checkpoint_folder: "evaluation/falcon/hm3d_real_world_lowmem/20260721/checkpoints"
 
   rl:
     ppo:
