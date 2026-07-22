@@ -66,26 +66,26 @@ habitat:
       agent_3_oracle_nav_randcoord_action_obstacle:
         type: OracleNavRandCoordAction_Obstacle 
         motion_control: human_joints
-        lin_speed: 10.0
-        ang_speed: 10.0
+        lin_speed: 5.0
+        ang_speed: 5.0
         allow_dyn_slide: True
       agent_4_oracle_nav_randcoord_action_obstacle:
         type: OracleNavRandCoordAction_Obstacle 
         motion_control: human_joints
-        lin_speed: 10.0
-        ang_speed: 10.0
+        lin_speed: 5.0
+        ang_speed: 5.0
         allow_dyn_slide: True
       agent_5_oracle_nav_randcoord_action_obstacle:
         type: OracleNavRandCoordAction_Obstacle 
         motion_control: human_joints
-        lin_speed: 10.0
-        ang_speed: 10.0
+        lin_speed: 5.0
+        ang_speed: 5.0
         allow_dyn_slide: True
       agent_6_oracle_nav_randcoord_action_obstacle:
         type: OracleNavRandCoordAction_Obstacle 
         motion_control: human_joints
-        lin_speed: 10.0
-        ang_speed: 10.0
+        lin_speed: 5.0
+        ang_speed: 5.0
         allow_dyn_slide: True
 habitat_baselines:
   evaluate: False # True
