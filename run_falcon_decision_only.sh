@@ -18,10 +18,10 @@ source /home/mobile/miniconda3/etc/profile.d/conda.sh
 conda activate falcon
 
 CHECKPOINT="${CHECKPOINT:-$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm0045.pth}"
-DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/aligned_depth_to_color/image_raw}"
+DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/depth/image_rect_raw}"
 RELATIVE_GOAL_TOPIC="${RELATIVE_GOAL_TOPIC:-/nav_bridge/relative_goal}"
 GOAL_VALID_TOPIC="${GOAL_VALID_TOPIC:-/nav_bridge/goal_valid}"
-DECISION_TOPIC="${DECISION_TOPIC:-/falcon/decision_cmd}"
+DECISION_TOPIC="${DECISION_TOPIC:-/nav_bridge/discrete_cmd}"
 
 exec python "$REPO_ROOT/sensor/falcon_nav_bridge.py" \
   --checkpoint "$CHECKPOINT" \
