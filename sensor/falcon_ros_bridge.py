@@ -777,7 +777,7 @@ def parse_args():
     p.add_argument("--input_type", type=str, default="depth", choices=["depth", "rgbd"])
     p.add_argument("--polar_source", type=str, default="topic", choices=["topic", "detections"])
 
-    p.add_argument("--depth_topic", type=str, default="/camera/aligned_depth_to_color/image_raw")
+    p.add_argument("--depth_topic", type=str, default="/camera/depth/image_rect_raw")
     p.add_argument("--polar_topic", type=str, default="/tag_polar")
     p.add_argument("--cmd_vel_topic", type=str, default=None, help=argparse.SUPPRESS)
     p.add_argument("--action_topic", type=str, default="/falcon/action_id")
