@@ -36,4 +36,5 @@ exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --action_topic "$ACTION_TOPIC" \
   --max_polar_age_sec "$MAX_POLAR_AGE_SEC" \
   --data_timeout_sec "$DATA_TIMEOUT_SEC" \
-  --polar_buffer_size "$POLAR_BUFFER_SIZE"
+  --polar_buffer_size "$POLAR_BUFFER_SIZE" \
+  --debug_timing

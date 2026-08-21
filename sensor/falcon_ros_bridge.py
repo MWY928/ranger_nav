@@ -20,6 +20,7 @@ from typing import Dict, Optional, Tuple
 from collections import deque
 import json
 import os
+import time
 
 import cv2
 import numpy as np
@@ -114,6 +115,7 @@ class FalconRosBridge(object):
         self.require_strict_ckpt = args.strict_checkpoint
         self.debug_mapping = args.debug_mapping
         self.debug_depth = args.debug_depth
+        self.debug_timing = args.debug_timing
         self.debug_depth_dump_dir = args.debug_depth_dump_dir
         self._depth_sample_saved = False
         self.replay_dump_enabled = args.replay_dump_enabled
@@ -682,15 +684,21 @@ class FalconRosBridge(object):
     def _pick_polar_for_stamp(self, target_stamp: rospy.Time):
         # Pick the temporally closest polar message to current image timestamp.
         if len(self.polar_buffer) == 0:
+            rospy.logwarn_throttle(
+                2.0,
+                "Polar buffer is empty: no /tag_polar message has reached Falcon yet.",
+            )
             return None
 
         # If image has no timestamp, fallback to latest.
         if target_stamp == rospy.Time():
             return self.polar_buffer[-1]
 
+        # Snapshot the deque because the polar subscriber may append concurrently.
+        polar_messages = list(self.polar_buffer)
         best = None
         best_dt = None
-        for msg in self.polar_buffer:
+        for msg in polar_messages:
             if msg.header.stamp == rospy.Time():
                 continue
             dt = abs((target_stamp - msg.header.stamp).to_sec())
@@ -701,6 +709,16 @@ class FalconRosBridge(object):
         if best is None:
             return self.polar_buffer[-1]
         if best_dt is not None and best_dt > self.max_polar_age_sec:
+            rospy.logwarn_throttle(
+                2.0,
+                "Depth/polar timestamp mismatch: nearest_dt=%.3fs > limit=%.3fs "
+                "depth_stamp=%.6f polar_stamp=%.6f polar_buffer=%d.",
+                best_dt,
+                self.max_polar_age_sec,
+                target_stamp.to_sec(),
+                best.header.stamp.to_sec(),
+                len(polar_messages),
+            )
             return None
         return best
 
@@ -713,16 +731,18 @@ class FalconRosBridge(object):
 
     def _process_one(self, depth_msg: Image, polar_msg: PointStamped = None):
         # Single end-to-end control step: select goal -> build obs -> infer -> publish cmd.
+        step_start = time.perf_counter()
         if polar_msg is None:
             polar_msg = self._pick_polar_for_stamp(depth_msg.header.stamp)
         if polar_msg is None:
-            rospy.logwarn_throttle(2.0, "No polar message received yet on polar topic.")
             self._publish_stop()
             return
         try:
             theta_in = float(polar_msg.point.y)
             obs, depth_debug = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
+            inference_start = time.perf_counter()
             act_id, probs, recurrent_input = self._infer_action(obs)
+            inference_end = time.perf_counter()
             if self.debug_mapping or self.debug_depth:
                 self._debug_print_once(obs, act_id, theta_in, probs, depth_debug)
             replay_limit_reached = self._maybe_dump_replay_sample(
@@ -747,6 +767,14 @@ class FalconRosBridge(object):
             self._publish_cmd(act_id)
             self.last_obs_time = rospy.Time.now()
             self._emit_heartbeat()
+            if self.debug_timing:
+                rospy.loginfo_throttle(
+                    2.0,
+                    "[DBG_TIMING] preprocess=%.3fs inference=%.3fs total=%.3fs",
+                    inference_start - step_start,
+                    inference_end - inference_start,
+                    time.perf_counter() - step_start,
+                )
         except Exception as e:
             self._publish_stop()
             rospy.logerr_throttle(1.0, "Falcon ROS bridge callback failed: %s", str(e))
@@ -794,6 +822,7 @@ def parse_args():
     p.add_argument("--strict_checkpoint", action="store_true")
     p.add_argument("--debug_mapping", action="store_true")
     p.add_argument("--debug_depth", action="store_true")
+    p.add_argument("--debug_timing", action="store_true")
     p.add_argument("--debug_depth_dump_dir", type=str, default="./test_modules/test_results/bridge_depth_samples")
     p.add_argument("--replay_dump_enabled", action="store_true")
     p.add_argument("--replay_dump_dir", type=str, default="./test_modules/test_results/bridge_policy_replay")
