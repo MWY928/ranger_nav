@@ -11,10 +11,17 @@ if [ -f /home/mobile/ranger_ws/devel/setup.bash ]; then
   source /home/mobile/ranger_ws/devel/setup.bash
 fi
 
-UNITREE_CONDA_ENV="${UNITREE_CONDA_ENV:-unitree}"
-if [ -f /home/mobile/miniconda3/etc/profile.d/conda.sh ]; then
-  source /home/mobile/miniconda3/etc/profile.d/conda.sh
-  conda activate "$UNITREE_CONDA_ENV"
+if [ -n "${VIRTUAL_ENV:-}" ]; then
+  UNITREE_PYTHON_ENV="venv:$VIRTUAL_ENV"
+else
+  UNITREE_CONDA_ENV="${UNITREE_CONDA_ENV:-${CONDA_DEFAULT_ENV:-unitree}}"
+  if [ -f /home/mobile/miniconda3/etc/profile.d/conda.sh ]; then
+    source /home/mobile/miniconda3/etc/profile.d/conda.sh
+    if [ "${CONDA_DEFAULT_ENV:-}" != "$UNITREE_CONDA_ENV" ]; then
+      conda activate "$UNITREE_CONDA_ENV"
+    fi
+  fi
+  UNITREE_PYTHON_ENV="conda:${CONDA_DEFAULT_ENV:-$UNITREE_CONDA_ENV}"
 fi
 
 ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
@@ -28,7 +35,7 @@ UNITREE_DRY_RUN="${UNITREE_DRY_RUN:-false}"
 UNITREE_BALANCE_STAND_ON_START="${UNITREE_BALANCE_STAND_ON_START:-false}"
 
 echo "Action topic:              $ACTION_TOPIC"
-echo "Unitree conda env:         $UNITREE_CONDA_ENV"
+echo "Unitree Python env:        $UNITREE_PYTHON_ENV"
 echo "Unitree network interface: $UNITREE_NETWORK_INTERFACE"
 echo "Unitree dry run:           $UNITREE_DRY_RUN"
 
