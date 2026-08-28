@@ -1,7 +1,7 @@
 <launch>
   <!-- Run this launch from an environment that can import unitree_sdk2py. -->
   <arg name="action_topic" default="/falcon/action_id" />
-  <arg name="network_interface" default="eth0" />
+  <arg name="network_interface" default="enxec9a0c1bc5be" />
   <arg name="domain_id" default="0" />
   <arg name="sdk_timeout_sec" default="10.0" />
   <arg name="forward_speed" default="0.6" />

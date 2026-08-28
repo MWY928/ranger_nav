@@ -90,19 +90,6 @@ ROS1 节点会使用随机 TCP 端口建立连接，因此不能只开放 `11311
 - Falcon 环境：Python 3.9、PyTorch、OpenCV、Gym，以及本仓库中的 `habitat-lab` 和 `habitat-baselines`。
 - Unitree 环境：`unitree_sdk2py` 和可用的 `rospy`。
 
-Falcon 基础环境可按以下方式安装：
-
-```bash
-conda create -n falcon python=3.9 cmake=3.14.0
-conda activate falcon
-
-conda install habitat-sim=0.3.1 withbullet headless \
-  -c conda-forge -c aihabitat
-
-pip install -e habitat-lab
-pip install -e habitat-baselines
-pip install -r requirements.txt
-```
 
 构建 Go2 ROS 包：
 
@@ -135,7 +122,6 @@ conda env: falcon / simple_nav / unitree
 - `run_bridge.sh`
 - `start_falcon_bridge.launch`
 - `go2/start_action_mapper.sh`
-- `go2/start_sport_state_odom.sh`
 - `sensor/falcon_ros_bridge.py` 顶部的 Python 搜索路径
 
 注意：`start_falcon_bridge.launch` 实际是 Bash 包装脚本，不是 ROS XML launch 文件，应使用 `bash start_falcon_bridge.launch ...`，不要对它执行 `roslaunch`。
@@ -279,43 +265,17 @@ bash start_detection.sh
 
 检测不同 ID 或尺寸的 AprilTag 时，还必须同步修改 `ranger_ws/src/go_nav/config/tags.yaml` 中的 `standalone_tags`。仅修改 `TARGET_TAG_ID` 不会自动更新标签物理尺寸。
 
-#### Go2 遮挡期间使用 SportModeState 短时补偿
+#### 可选：遮挡期间使用里程计外推
 
-`start_detection_full.sh` 现在默认从 `/go2/sport_odom` 使用 Go2 本体位姿。由于 `simple_nav` 与 Unitree SDK2 往往位于不同 Conda 环境，状态桥和检测节点分开启动。
-
-先在能够同时访问 ROS master 和 Go2 SDK2 网络的机器上启动状态桥（可与 action mapper 在同一台机器上）：
+如已有可靠的 `nav_msgs/Odometry`：
 
 ```bash
-cd /home/mobile/ranger_nav
-
-UNITREE_CONDA_ENV=unitree \
-UNITREE_NETWORK_INTERFACE=eth0 \
-UNITREE_DOMAIN_ID=0 \
-bash go2/start_sport_state_odom.sh
-```
-
-状态桥订阅 SDK2 的 `rt/sportmodestate`，将 `position` 和 IMU 姿态转换成 ROS1 `nav_msgs/Odometry`：
-
-```bash
-rostopic type /go2/sport_odom
-rostopic hz /go2/sport_odom
-rostopic echo -n 1 /go2/sport_odom
-```
-
-若当前固件只提供低频状态，可设置 `SPORT_STATE_TOPIC=rt/lf/sportmodestate`。
-
-然后在算法机启动完整检测：
-
-```bash
-cd /home/mobile/ranger_nav
+USE_ODOM_FALLBACK=true \
+ODOM_TOPIC=/odom \
 bash start_detection_full.sh
 ```
 
-完整版本在最后一次视觉观测时把 AprilTag 的物理位置保存到 Go2 odom 坐标系；标签被遮挡后，根据机器人当前位姿重新计算相对距离和方位。视觉恢复时会持续校正缓存位置。默认丢失 `0.12 s` 后开始补偿，最多补偿到 `1.0 s`，发布频率 `20 Hz`。超过窗口、里程计超过 `0.25 s` 未更新，或里程计发生跳变时停止补偿，让下游 watchdog 安全停车。若 D435 光心离 `base_link` 原点较远，应测量并设置 `CAMERA_OFFSET_X_M`（前为正）和 `CAMERA_OFFSET_Y_M`（左为正）。
-
-该模型只补偿机器人自身运动，短时遮挡内假设标签在 odom 坐标系中静止；如果标签绑在快速移动的人身上，应进一步缩短 `PREDICT_TIMEOUT_SEC`。如果已经有其他可靠的 ROS 里程计，可以不启动 SDK2 状态桥，直接设置 `ODOM_TOPIC`。
-
-首次实机验证时先抬起或低速运行 Go2：遮住标签后，机器人向标签前进应使 `/tag_polar.point.x` 减小；机器人向左原地转动应使 `/tag_polar.point.y` 变为负值。若方向不符，不要启用实际运动，先检查 SportModeState 坐标、IMU yaw 和相机安装角。
+完整版本在标签短暂丢失后，使用 odom 中保存的标签位置继续发布 `/tag_polar`。默认在丢失 `0.30 s` 后开始外推，最多持续 `5.0 s`，发布频率 `20 Hz`。如果 Go2 的 odom 坐标、朝向符号或时间戳尚未验证，应保持默认的 `USE_ODOM_FALLBACK=false`。
 
 ### 5.3 启动 Falcon 推理
 
@@ -350,9 +310,15 @@ Falcon bridge 由深度帧驱动推理。没有有效 `/tag_polar`、输入时�
 运行动作映射节点前，先确认 Unitree Python 环境能够导入 SDK：
 
 ```bash
-conda activate unitree
-python -c "import unitree_sdk2py; print('unitree_sdk2py OK')"
+source /path/to/unitree_venv/bin/activate
+source /opt/ros/noetic/setup.bash
+unset UNITREE_CONDA_ENV
+python3 -c "import sys, rospy, nav_msgs.msg, unitree_sdk2py; print('Unitree venv OK:', sys.executable)"
 ```
+
+SDK2 可以安装在系统 Python、普通 venv 或 Conda 环境中。启动脚本默认使用当前
+`python3`。当前部署使用普通 venv：先激活 venv，并且不要设置 `UNITREE_CONDA_ENV`；
+只有明确使用 Conda 时才设置该变量。
 
 然后启用 dry-run。此模式只打印 SDK 命令，不控制机器人：
 
@@ -360,7 +326,7 @@ python -c "import unitree_sdk2py; print('unitree_sdk2py OK')"
 cd /home/mobile/ranger_nav
 
 UNITREE_DRY_RUN=true \
-UNITREE_NETWORK_INTERFACE=eth0 \
+UNITREE_NETWORK_INTERFACE=enxec9a0c1bc5be \
 bash go2/start_action_mapper.sh
 ```
 
@@ -378,7 +344,7 @@ rostopic pub -1 /falcon/action_id std_msgs/Int32 "data: 0"
 确认图像、标签方位、Falcon 动作、左右转方向和遥控停止手段均正常后，再关闭 dry-run：
 
 ```bash
-UNITREE_NETWORK_INTERFACE=eth0 \
+UNITREE_NETWORK_INTERFACE=enxec9a0c1bc5be \
 UNITREE_DOMAIN_ID=0 \
 FORWARD_SPEED=0.3 \
 TURN_SPEED=0.4 \
@@ -387,7 +353,7 @@ UNITREE_DRY_RUN=false \
 bash go2/start_action_mapper.sh
 ```
 
-请先使用低速值完成空旷场地测试。`UNITREE_NETWORK_INTERFACE` 必须是能够访问 Go2 SDK2 通道的实际网卡名，例如 `eth0` 或 `enp...`；它不一定与 ROS 多机通信使用同一张网卡。
+请先使用低速值完成空旷场地测试。当前算法机通过 USB 转网口 `enxec9a0c1bc5be` 访问 Go2 SDK2 通道；换机器或更换转接器后，可通过 `UNITREE_NETWORK_INTERFACE` 覆盖默认值。它不一定与 ROS 多机通信使用同一张网卡。
 
 动作映射节点在以下情况调用 `StopMove()`：
 
@@ -411,7 +377,7 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `/camera/aligned_depth_to_color/image_raw` | `sensor_msgs/Image` | Jetson `realsense2_ros` | Falcon bridge |
 | `/tag_detections` | `apriltag_ros/AprilTagDetectionArray` | `apriltag_ros` | polar node |
 | `/tag_polar` | `geometry_msgs/PointStamped` | polar node | Falcon bridge |
-| `/go2/sport_odom` | `nav_msgs/Odometry` | SDK2 SportModeState bridge | full tracker |
+| `/odom` | `nav_msgs/Odometry` | Go2/定位节点 | full tracker，可选 |
 | `/falcon/action_id` | `std_msgs/Int32` | Falcon bridge | Unitree action mapper |
 | `/falcon/obs_heartbeat` | `std_msgs/Header` | Falcon bridge | 调试/监控 |
 
@@ -431,40 +397,19 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `USE_FIRST_DETECTION` | `false` | 忽略 ID，使用第一个检测 |
 | `THETA_OFFSET_RAD` | `0.0` | 相机安装角修正 |
 | `THETA_DEADBAND_RAD` | `0.0` | 角度死区 |
-| `CAMERA_OFFSET_X_M` | `0.0` | D435 光心在 `base_link` 中的前向位置（full） |
-| `CAMERA_OFFSET_Y_M` | `0.0` | D435 光心在 `base_link` 中的左向位置（full） |
 | `DISTANCE_OFFSET` | `0.6` | 从测量距离中减去的偏移 |
 | `MIN_DISTANCE` | `0.0` | 输出距离下限 |
-| `USE_ODOM_FALLBACK` | `true`（full） | 启用标签丢失后的 odom 外推 |
-| `ODOM_TOPIC` | `/go2/sport_odom` | 里程计 topic |
-| `LOST_TIMEOUT_SEC` | `0.12` | 最后一次视觉观测后开始补偿的延时 |
-| `PREDICT_TIMEOUT_SEC` | `1.0` | 从最后一次视觉观测起允许补偿的总时长 |
-| `PREDICT_RATE_HZ` | `20.0` | 补偿结果发布频率 |
-| `ODOM_TIMEOUT_SEC` | `0.25` | 里程计最大允许陈旧时间 |
-| `ODOM_FILTER_ALPHA` | `0.5` | 视觉对 odom 中标签位置的校正权重 |
-| `MAX_ODOM_JUMP_M` | `0.75` | 单次位置跳变清除标签缓存的阈值；`0` 表示关闭 |
-| `MAX_ODOM_YAW_JUMP_RAD` | `1.20` | 单次 yaw 跳变清除标签缓存的阈值；`0` 表示关闭 |
-
-### Unitree SportModeState 状态桥
-
-| 环境变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `SPORT_STATE_TOPIC` | `rt/sportmodestate` | SDK2 DDS 状态 topic |
-| `ODOM_TOPIC` | `/go2/sport_odom` | ROS1 里程计输出 |
-| `ODOM_FRAME_ID` | `go2_odom` | 里程计世界坐标系 |
-| `BASE_FRAME_ID` | `base_link` | 机器人机身坐标系 |
-| `SPORT_STATE_TIMEOUT_SEC` | `0.5` | 无状态数据时报警的等待时间 |
-| `SPORT_ODOM_RATE_HZ` | `50.0` | ROS1 里程计最大发布频率 |
-| `UNITREE_NETWORK_INTERFACE` | `eth0` | 能访问 Go2 SDK2 的网卡 |
-| `UNITREE_DOMAIN_ID` | `0` | SDK2 DDS domain ID |
+| `USE_ODOM_FALLBACK` | `false` | 启用标签丢失后的 odom 外推 |
+| `ODOM_TOPIC` | `/odom` | 里程计 topic |
 
 ### Unitree 动作映射
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `ACTION_TOPIC` | `/falcon/action_id` | 离散动作 topic |
-| `UNITREE_CONDA_ENV` | `unitree` | Unitree SDK2 Conda 环境 |
-| `UNITREE_NETWORK_INTERFACE` | `eth0` | Unitree SDK2 网卡 |
+| `UNITREE_CONDA_ENV` | 未设置 | 可选的 Unitree SDK2 Conda 环境；非 Conda 安装不要设置 |
+| `UNITREE_PYTHON_BIN` | `python3` | 能同时导入 `unitree_sdk2py` 和 `rospy` 的 Python 命令或绝对路径 |
+| `UNITREE_NETWORK_INTERFACE` | `enxec9a0c1bc5be` | 当前算法机连接 Go2 的 USB 转网口；可按机器覆盖 |
 | `UNITREE_DOMAIN_ID` | `0` | SDK2 DDS domain ID |
 | `UNITREE_TIMEOUT_SEC` | `10.0` | SportClient 调用超时 |
 | `FORWARD_SPEED` | `0.6` | 前进速度 |
@@ -512,7 +457,7 @@ bash start_falcon_bridge.launch \
 ### 有 `/falcon/action_id`，但 Go2 不动
 
 - 确认 `UNITREE_DRY_RUN=false`。
-- 在 `unitree` 环境中确认能够导入 `unitree_sdk2py`。
+- 使用启动脚本打印出的 Python 路径确认能够导入 `unitree_sdk2py` 和 `rospy`。
 - 确认 `UNITREE_NETWORK_INTERFACE` 指向 Go2 控制网络。
 - 查看动作映射节点是否打印 `SportClient ready`，以及 SDK 是否返回非零错误码。
 - 确认 Go2 当前模式允许 `SportClient.Move()` 控制。
@@ -534,7 +479,7 @@ bash start_falcon_bridge.launch \
 ranger_ws/src/go_nav/
 ├── config/tags.yaml                    # AprilTag family、ID 和尺寸
 ├── launch/go2_detection_simple.launch  # AprilTag + 直接极坐标
-├── launch/go2_detection_full.launch    # AprilTag + Go2 odom 短时外推
+├── launch/go2_detection_full.launch    # AprilTag + 可选 odom 外推
 ├── launch/go2_action_mapper.launch     # 离散动作到 Unitree SDK2
 └── scripts/
     ├── polar_distance.py
@@ -547,8 +492,6 @@ start_detection_full.sh                  # 完整目标跟踪入口
 run_bridge.sh                            # 默认 Falcon 实机推理入口
 start_falcon_bridge.launch               # 可传参数的 Bash 推理入口
 go2/start_action_mapper.sh               # Unitree 动作映射入口
-go2/sport_mode_state_to_odom.py          # SDK2 状态 -> ROS1 Odometry
-go2/start_sport_state_odom.sh            # Go2 本体状态桥入口
 record_real_world_trajectory.sh          # 实机推理样本记录
 ```
 
@@ -595,6 +538,6 @@ sh habitat-baselines/habitat_baselines/rl/ddppo/single_node_falcon.sh
 - [Habitat-Lab](https://github.com/facebookresearch/habitat-lab)
 - [Habitat-Sim](https://github.com/facebookresearch/habitat-sim)
 - [Proximity](https://github.com/EnricoCancelli/ProximitySocialNav)
-- [Unitree SDK2 Python](https://github.com/unitreerobotics/unitree_sdk2_python) / `unitree_sdk2py`
+- Unitree SDK2 / `unitree_sdk2py`
 - `realsense2_ros`
 - `apriltag_ros`

@@ -178,7 +178,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Bridge Unitree Go2 rt/sportmodestate to ROS1 Odometry."
     )
-    parser.add_argument("--network_interface", default="eth0")
+    parser.add_argument("--network_interface", default="enxec9a0c1bc5be")
     parser.add_argument("--domain_id", type=int, default=0)
     parser.add_argument("--sdk_topic", default="rt/sportmodestate")
     parser.add_argument("--odom_topic", default="/go2/sport_odom")

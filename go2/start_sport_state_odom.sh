@@ -17,19 +17,33 @@ if [[ -f /home/mobile/ranger_ws/devel/setup.bash ]]; then
   source /home/mobile/ranger_ws/devel/setup.bash
 fi
 
-if [[ -z "${VIRTUAL_ENV:-}" ]]; then
-  UNITREE_CONDA_ENV="${UNITREE_CONDA_ENV:-${CONDA_DEFAULT_ENV:-unitree}}"
-  if [[ -f /home/mobile/miniconda3/etc/profile.d/conda.sh ]]; then
-    # shellcheck disable=SC1091
-    source /home/mobile/miniconda3/etc/profile.d/conda.sh
-    if [[ "${CONDA_DEFAULT_ENV:-}" != "$UNITREE_CONDA_ENV" ]]; then
-      conda activate "$UNITREE_CONDA_ENV"
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  UNITREE_PYTHON_ENV="venv:$VIRTUAL_ENV"
+elif [[ -n "${UNITREE_CONDA_ENV:-}" ]]; then
+  CONDA_SETUP="${UNITREE_CONDA_SH:-/home/mobile/miniconda3/etc/profile.d/conda.sh}"
+  if [[ ! -f "$CONDA_SETUP" ]]; then
+    echo "ERROR: Conda setup script not found: $CONDA_SETUP" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "$CONDA_SETUP"
+  if [[ "${CONDA_DEFAULT_ENV:-}" != "$UNITREE_CONDA_ENV" ]]; then
+    if ! conda activate "$UNITREE_CONDA_ENV"; then
+      echo "ERROR: Cannot activate UNITREE_CONDA_ENV=$UNITREE_CONDA_ENV" >&2
+      echo "Unset UNITREE_CONDA_ENV when SDK2 is installed outside Conda." >&2
+      exit 1
     fi
   fi
+  UNITREE_PYTHON_ENV="conda:$UNITREE_CONDA_ENV"
+elif [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+  # Keep an already-active Conda environment, but do not require Conda.
+  UNITREE_PYTHON_ENV="conda-current:$CONDA_DEFAULT_ENV"
+else
+  UNITREE_PYTHON_ENV="current-python"
 fi
 
 UNITREE_PYTHON_BIN="${UNITREE_PYTHON_BIN:-python3}"
-UNITREE_NETWORK_INTERFACE="${UNITREE_NETWORK_INTERFACE:-eth0}"
+UNITREE_NETWORK_INTERFACE="${UNITREE_NETWORK_INTERFACE:-enxec9a0c1bc5be}"
 UNITREE_DOMAIN_ID="${UNITREE_DOMAIN_ID:-0}"
 SPORT_STATE_TOPIC="${SPORT_STATE_TOPIC:-rt/sportmodestate}"
 ODOM_TOPIC="${ODOM_TOPIC:-/go2/sport_odom}"
@@ -53,6 +67,8 @@ fi
 
 echo "Unitree network interface: $UNITREE_NETWORK_INTERFACE"
 echo "Unitree DDS domain:        $UNITREE_DOMAIN_ID"
+echo "Unitree Python env:        $UNITREE_PYTHON_ENV"
+echo "Unitree Python executable: $PYTHON_EXECUTABLE"
 echo "SportModeState topic:     $SPORT_STATE_TOPIC"
 echo "ROS odometry topic:       $ODOM_TOPIC"
 echo "ROS odometry rate:        $SPORT_ODOM_RATE_HZ Hz"
