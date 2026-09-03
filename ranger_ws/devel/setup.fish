@@ -18,7 +18,7 @@ if not type -q bass
 end
 
 if test -z $_CATKIN_SETUP_DIR
-    set _CATKIN_SETUP_DIR /home/iaii/ranger_ws/devel
+    set _CATKIN_SETUP_DIR /home/mobile/wys/go2_falcon_main/ranger_nav_go2/ranger_ws/devel
 end
 
 set _SETUP_UTIL "$_CATKIN_SETUP_DIR/_setup_util.py"
