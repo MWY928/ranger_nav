@@ -8,6 +8,11 @@
   <arg name="turn_speed" default="0.6" />
   <arg name="action_timeout_sec" default="0.3" />
   <arg name="watchdog_rate_hz" default="20.0" />
+  <arg name="smoothing_enabled" default="true" />
+  <arg name="linear_accel_limit" default="1.0" />
+  <arg name="linear_decel_limit" default="1.5" />
+  <arg name="yaw_accel_limit" default="2.0" />
+  <arg name="yaw_decel_limit" default="3.0" />
   <arg name="dry_run" default="false" />
   <arg name="balance_stand_on_start" default="false" />
 
@@ -23,6 +28,11 @@
               --turn_speed $(arg turn_speed)
               --action_timeout_sec $(arg action_timeout_sec)
               --watchdog_rate_hz $(arg watchdog_rate_hz)
+              --smoothing_enabled $(arg smoothing_enabled)
+              --linear_accel_limit $(arg linear_accel_limit)
+              --linear_decel_limit $(arg linear_decel_limit)
+              --yaw_accel_limit $(arg yaw_accel_limit)
+              --yaw_decel_limit $(arg yaw_decel_limit)
               --dry_run $(arg dry_run)
               --balance_stand_on_start $(arg balance_stand_on_start)" />
 </launch>

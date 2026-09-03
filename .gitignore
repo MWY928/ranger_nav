@@ -39,6 +39,7 @@ pip-delete-this-directory.txt
 # Unit test / coverage reports
 htmlcov/
 .tox/
+.pytest_cache/
 .coverage
 .coverage.*
 .cache
@@ -110,6 +111,14 @@ data
 # our additional
 .history
 evaluation/
+
+# ROS/catkin workspace outputs (machine-local CMake products)
+/ranger_ws/build/
+/ranger_ws/devel/
+/ranger_ws/install/
+/ranger_ws/log/
+/ranger_ws/logs/
+/ranger_ws/.catkin_tools/
 
 debug/
 pretrained_model/

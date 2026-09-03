@@ -20,6 +20,7 @@ from typing import Dict, Optional, Tuple
 from collections import deque
 import json
 import os
+import threading
 import time
 
 import cv2
@@ -34,12 +35,22 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Header, Int32
 
 import sys
+
 sys.path.append("/home/mobile/ranger_nav/habitat-baselines/")
 sys.path.append("/home/mobile/ranger_nav/habitat-lab/")
 sys.path.append("/home/mobile/ranger_nav")
 
 from habitat_baselines.rl.ddppo.policy import PointNavResNetPolicy
 from habitat_baselines.utils.common import batch_obs
+
+try:
+    from action_filter import ActionFilterResult, ActionProbabilityFilter
+except ImportError:
+    # Support importing this file as ``sensor.falcon_ros_bridge`` in tooling/tests.
+    from sensor.action_filter import (
+        ActionFilterResult,
+        ActionProbabilityFilter,
+    )
 
 
 ACTION_NAMES = {
@@ -50,7 +61,22 @@ ACTION_NAMES = {
 }
 
 
-def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
+def str_to_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = str(value).strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError(
+        "Expected a boolean value, got {!r}".format(value)
+    )
+
+
+def _extract_actor_critic_state_dict(
+    ckpt_obj: Dict,
+) -> Dict[str, torch.Tensor]:
     """
     Accept different checkpoint layouts and return state_dict keys
     compatible with PointNavResNetPolicy.
@@ -58,7 +84,9 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
     # 训练脚本保存 checkpoint 的层级可能不同，这里统一整理成 policy 可加载的 key。
     src = ckpt_obj.get("state_dict", ckpt_obj)
     if not isinstance(src, dict):
-        raise RuntimeError("Unsupported checkpoint format: state_dict is not a dict.")
+        raise RuntimeError(
+            "Unsupported checkpoint format: state_dict is not a dict."
+        )
 
     out = {}
     for k, v in src.items():
@@ -69,7 +97,11 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
         if "actor_critic." in k:
             kk = k.split("actor_critic.", 1)[1]
             out[kk] = v
-        elif k.startswith("net.") or k.startswith("action_distribution.") or k.startswith("critic."):
+        elif (
+            k.startswith("net.")
+            or k.startswith("action_distribution.")
+            or k.startswith("critic.")
+        ):
             out[k] = v
     if len(out) == 0:
         out = {
@@ -78,13 +110,19 @@ def _extract_actor_critic_state_dict(ckpt_obj: Dict) -> Dict[str, torch.Tensor]:
             if isinstance(k, str) and torch.is_tensor(v)
         }
     if len(out) == 0:
-        raise RuntimeError("No string-key tensor parameters found in checkpoint.")
+        raise RuntimeError(
+            "No string-key tensor parameters found in checkpoint."
+        )
     return out
 
 
 def _select_agent0_checkpoint_state_dict(ckpt_obj):
     """Return the policy state_dict from common single-agent or multi-agent ckpt layouts."""
-    if isinstance(ckpt_obj, (list, tuple)) and len(ckpt_obj) > 0 and isinstance(ckpt_obj[0], dict):
+    if (
+        isinstance(ckpt_obj, (list, tuple))
+        and len(ckpt_obj) > 0
+        and isinstance(ckpt_obj[0], dict)
+    ):
         return ckpt_obj[0].get("state_dict", ckpt_obj[0])
 
     if isinstance(ckpt_obj, dict):
@@ -105,7 +143,9 @@ class FalconRosBridge(object):
         # 初始化 ROS 节点和推理设备。
         rospy.init_node("falcon_ros_bridge", anonymous=False)
 
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(
+            "cuda:0" if torch.cuda.is_available() else "cpu"
+        )
         rospy.loginfo("Falcon device: %s", str(self.device))
 
         # 保存运行参数：输入分辨率、深度范围、推理模式和调试开关。
@@ -124,6 +164,21 @@ class FalconRosBridge(object):
         self._replay_dump_count = 0
         self._replay_dump_limit_reached = False
 
+        self.action_filter_enabled = bool(args.action_filter_enabled)
+        self.action_filter = ActionProbabilityFilter(
+            action_count=len(ACTION_NAMES),
+            tau_sec=args.action_filter_tau_sec,
+            switch_margin=args.action_switch_margin,
+            switch_hold_sec=args.action_switch_hold_sec,
+            stop_hold_sec=args.stop_switch_hold_sec,
+            stop_action_id=0,
+        )
+        # Robot starts stopped; require a confirmed policy transition before motion.
+        self.action_filter.force_action(0)
+        self.action_state_lock = threading.RLock()
+        self.safety_stop_generation = 0
+        self.pending_prev_stop = False
+
         # Policy obs keys should match your social_nav_v2 config.
         # 这些 key 必须和训练 Falcon/PointNav 模型时的 observation space 的key一致。
         self.depth_key = args.depth_obs_key
@@ -133,6 +188,7 @@ class FalconRosBridge(object):
         self.latest_polar_msg = None
         self.polar_buffer = deque(maxlen=max(10, args.polar_buffer_size))
         self.last_obs_time = rospy.Time(0)
+        self.stopped_for_data_timeout = False
         self.data_timeout_sec = args.data_timeout_sec
         self.max_polar_age_sec = args.max_polar_age_sec
 
@@ -153,23 +209,36 @@ class FalconRosBridge(object):
             args.hidden_size,
             device=self.device,
         )
-        self.not_done_masks = torch.zeros(1, 1, dtype=torch.bool, device=self.device)
-        self.prev_actions = torch.zeros(1, 1, dtype=torch.long, device=self.device)
+        self.not_done_masks = torch.zeros(
+            1, 1, dtype=torch.bool, device=self.device
+        )
+        self.prev_actions = torch.zeros(
+            1, 1, dtype=torch.long, device=self.device
+        )
 
         self.action_topic = args.action_topic
-        self.action_pub = rospy.Publisher(self.action_topic, Int32, queue_size=10)
+        self.action_pub = rospy.Publisher(
+            self.action_topic, Int32, queue_size=10
+        )
         rospy.on_shutdown(self._publish_stop)
-        self.debug_obs_pub = rospy.Publisher(args.debug_obs_topic, Header, queue_size=10)
+        self.debug_obs_pub = rospy.Publisher(
+            args.debug_obs_topic, Header, queue_size=10
+        )
 
         # ROS 订阅器：极坐标目标和深度图。
         self.polar_sub = rospy.Subscriber(
             args.polar_topic, PointStamped, self._polar_cb, queue_size=20
         )
-        self.depth_sub = rospy.Subscriber(args.depth_topic, Image, self._cb_depth, queue_size=10)
+        # A controller should process the freshest frame instead of queued stale images.
+        self.depth_sub = rospy.Subscriber(
+            args.depth_topic, Image, self._cb_depth, queue_size=1
+        )
 
         if self.debug_depth:
             os.makedirs(self.debug_depth_dump_dir, exist_ok=True)
-            rospy.loginfo("Depth debug dump dir: %s", self.debug_depth_dump_dir)
+            rospy.loginfo(
+                "Depth debug dump dir: %s", self.debug_depth_dump_dir
+            )
         if self.replay_dump_enabled:
             os.makedirs(self.replay_dump_dir, exist_ok=True)
             rospy.loginfo("Policy replay dump dir: %s", self.replay_dump_dir)
@@ -177,6 +246,16 @@ class FalconRosBridge(object):
         rospy.loginfo("Falcon ROS bridge started.")
         rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
         rospy.loginfo("Publish action_id: %s", self.action_topic)
+        rospy.loginfo(
+            "Action filter: enabled=%s tau=%.3fs margin=%.3f "
+            "switch_hold=%.3fs stop_hold=%.3fs deterministic=%s",
+            self.action_filter_enabled,
+            args.action_filter_tau_sec,
+            args.action_switch_margin,
+            args.action_switch_hold_sec,
+            args.stop_switch_hold_sec,
+            self.deterministic,
+        )
         # Watchdog 定时检查输入是否超时，超时就发布停车命令。
         self.watchdog = rospy.Timer(rospy.Duration(0.05), self._watchdog_cb)
 
@@ -219,14 +298,22 @@ class FalconRosBridge(object):
         ).to(self.device)
 
         # 加载 checkpoint，并允许非严格匹配，方便兼容不同训练保存格式。
-        ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        ckpt = torch.load(
+            checkpoint_path, map_location=self.device, weights_only=False
+        )
         ckpt = _select_agent0_checkpoint_state_dict(ckpt)
         policy_sd = _extract_actor_critic_state_dict(ckpt)
         missing, unexpected = policy.load_state_dict(policy_sd, strict=False)
 
         rospy.logwarn("Checkpoint loaded with strict=False.")
-        rospy.logwarn("Missing keys: %d, Unexpected keys: %d", len(missing), len(unexpected))
-        if self.require_strict_ckpt and (len(missing) > 0 or len(unexpected) > 0):
+        rospy.logwarn(
+            "Missing keys: %d, Unexpected keys: %d",
+            len(missing),
+            len(unexpected),
+        )
+        if self.require_strict_ckpt and (
+            len(missing) > 0 or len(unexpected) > 0
+        ):
             raise RuntimeError(
                 "Checkpoint key mismatch: missing={} unexpected={}".format(
                     len(missing), len(unexpected)
@@ -239,12 +326,26 @@ class FalconRosBridge(object):
         # Convert common ROS Image encodings to numpy without cv_bridge.
         if msg.encoding == "16UC1":
             row_bytes = msg.width * 2
-            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
-            arr = raw[:, :row_bytes].copy().view(np.uint16).reshape(msg.height, msg.width)
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                msg.height, msg.step
+            )
+            arr = (
+                raw[:, :row_bytes]
+                .copy()
+                .view(np.uint16)
+                .reshape(msg.height, msg.width)
+            )
         elif msg.encoding == "32FC1":
             row_bytes = msg.width * 4
-            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step)
-            arr = raw[:, :row_bytes].copy().view(np.float32).reshape(msg.height, msg.width)
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                msg.height, msg.step
+            )
+            arr = (
+                raw[:, :row_bytes]
+                .copy()
+                .view(np.float32)
+                .reshape(msg.height, msg.width)
+            )
             print("notice the output depth type is 32FC1")
         # elif msg.encoding in ("rgb8", "bgr8"):
         #     row_bytes = msg.width * 3
@@ -252,7 +353,9 @@ class FalconRosBridge(object):
         #     arr = raw[:, :row_bytes].copy().reshape(msg.height, msg.width, 3)
         #     print("notice the input th color img now")
         else:
-            raise ValueError("Unsupported image encoding: {}".format(msg.encoding))
+            raise ValueError(
+                "Unsupported image encoding: {}".format(msg.encoding)
+            )
 
         if msg.is_bigendian:
             arr = arr.byteswap().newbyteorder()
@@ -369,10 +472,12 @@ class FalconRosBridge(object):
             debug["raw_dtype"] = str(depth_f32.dtype)
             debug["raw_unit"] = "m"
             debug["raw_stats"] = self._depth_stats(depth_f32)
-            depth_m = depth_f32.astype(np.float32)*0.001
+            depth_m = depth_f32.astype(np.float32) * 0.001
 
         # 清理 NaN/Inf，裁剪到最大深度，并把无效 0 深度替换成远距离值。
-        depth_m = np.nan_to_num(depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0)
+        depth_m = np.nan_to_num(
+            depth_m, nan=self.max_depth_m, posinf=self.max_depth_m, neginf=0.0
+        )
         depth_m = np.clip(depth_m, 0.0, self.max_depth_m)
         depth_m = self._replace_zero_depth_with_ten(depth_m)
         debug["depth_m_stats"] = self._depth_stats(depth_m)
@@ -381,7 +486,11 @@ class FalconRosBridge(object):
         debug["crop_shape"] = tuple(depth_m.shape)
         debug["crop_stats"] = self._depth_stats(depth_m)
         depth_norm = depth_m / self.max_depth_m
-        depth_norm = cv2.resize(depth_norm, (self.resolution, self.resolution), interpolation=cv2.INTER_NEAREST)
+        depth_norm = cv2.resize(
+            depth_norm,
+            (self.resolution, self.resolution),
+            interpolation=cv2.INTER_NEAREST,
+        )
         # 统一成 float32，并给二维深度图增加通道维，得到模型期望的 (H, W, 1)。
         depth_norm = np.expand_dims(depth_norm.astype(np.float32), axis=-1)
         debug["norm_shape"] = tuple(depth_norm.shape)
@@ -408,7 +517,6 @@ class FalconRosBridge(object):
         if not self.debug_depth or self._depth_sample_saved:
             return
 
-    
         stamp_ns = int(rospy.Time.now().to_nsec())
         prefix = "depth_sample_{}".format(stamp_ns)
         out_dir = self.debug_depth_dump_dir
@@ -435,9 +543,11 @@ class FalconRosBridge(object):
                 raw_png,
                 self._make_depth_preview(
                     raw_depth,
-                    clip_max=self.max_depth_m * 1000.0
-                    if depth_debug["raw_unit"] == "mm"
-                    else self.max_depth_m,
+                    clip_max=(
+                        self.max_depth_m * 1000.0
+                        if depth_debug["raw_unit"] == "mm"
+                        else self.max_depth_m
+                    ),
                 ),
             )
             cv2.imwrite(
@@ -449,7 +559,6 @@ class FalconRosBridge(object):
                 self._make_depth_preview(depth_norm, clip_max=1.0),
             )
 
-            
             meta = {
                 "prefix": prefix,
                 "max_depth_m": float(self.max_depth_m),
@@ -526,7 +635,6 @@ class FalconRosBridge(object):
 
             self.hidden_states = next_hidden_states
             self.not_done_masks.fill_(True)
-            self.prev_actions.copy_(actions)
 
             probs = None
             if self.actor_critic.action_distribution_type == "categorical":
@@ -534,19 +642,26 @@ class FalconRosBridge(object):
 
         return int(actions[0][0].item()), probs, recurrent_input
 
+    def _select_executed_action(
+        self, raw_action_id: int, probs: Optional[np.ndarray]
+    ) -> Tuple[int, Optional[ActionFilterResult]]:
+        if not self.action_filter_enabled or probs is None:
+            return int(raw_action_id), None
+
+        result = self.action_filter.update(probs, time.monotonic())
+        return int(result.action_id), result
+
     @staticmethod
     def _fmt_stats(stats: Dict[str, float]) -> str:
         # 将深度统计结果格式化成一行日志文本。
-        return (
-            "valid={:.1f}% min={:.3f} max={:.3f} mean={:.3f} p50={:.3f} p95={:.3f} zero={:.1f}%".format(
-                100.0 * stats["valid_ratio"],
-                stats["min"],
-                stats["max"],
-                stats["mean"],
-                stats["p50"],
-                stats["p95"],
-                100.0 * stats["zero_ratio"],
-            )
+        return "valid={:.1f}% min={:.3f} max={:.3f} mean={:.3f} p50={:.3f} p95={:.3f} zero={:.1f}%".format(
+            100.0 * stats["valid_ratio"],
+            stats["min"],
+            stats["max"],
+            stats["mean"],
+            stats["p50"],
+            stats["p95"],
+            100.0 * stats["zero_ratio"],
         )
 
     def _fmt_action_probs(self, probs: Optional[np.ndarray]) -> str:
@@ -563,15 +678,27 @@ class FalconRosBridge(object):
     def _debug_print_once(
         self,
         obs: Dict[str, np.ndarray],
-        act_id: int,
+        raw_action_id: int,
+        action_id: int,
         theta_in: float,
         probs: Optional[np.ndarray],
+        filter_result: Optional[ActionFilterResult],
         depth_debug: Dict[str, object],
     ):
         # 打印一次推理的关键输入、输出和深度处理统计，用于检查映射是否正确。
         g = obs[self.goal_key]
         d = obs[self.depth_key]
-        action_name = ACTION_NAMES.get(act_id, "action_{}".format(act_id))
+        raw_action_name = ACTION_NAMES.get(
+            raw_action_id, "action_{}".format(raw_action_id)
+        )
+        action_name = ACTION_NAMES.get(
+            action_id, "action_{}".format(action_id)
+        )
+        filtered_probs = (
+            None
+            if filter_result is None
+            else np.asarray(filter_result.filtered_probs, dtype=np.float32)
+        )
 
         if self.debug_depth:
             rospy.loginfo(
@@ -594,21 +721,35 @@ class FalconRosBridge(object):
                 )
             )
 
-        rospy.loginfo(
+        rospy.loginfo_throttle(
+            0.5,
             "[DBG_ACT] goal[r,theta]=[{:.3f}, {:.3f}] input_theta={:.3f}(pass-through) depth_shape={} depth[min,max]=[{:.3f},{:.3f}] "
-            "act_id={}({}) action_topic={} probs=[{}]".format(
-                float(g[0]), float(g[1]), float(theta_in),
-                tuple(d.shape), float(d.min()), float(d.max()),
-                int(act_id), action_name, self.action_topic,
+            "raw_action={}({}) executed_action={}({}) switched={} action_topic={} "
+            "probs=[{}] ema=[{}]".format(
+                float(g[0]),
+                float(g[1]),
+                float(theta_in),
+                tuple(d.shape),
+                float(d.min()),
+                float(d.max()),
+                int(raw_action_id),
+                raw_action_name,
+                int(action_id),
+                action_name,
+                False if filter_result is None else filter_result.switched,
+                self.action_topic,
                 self._fmt_action_probs(probs),
-            )
+                self._fmt_action_probs(filtered_probs),
+            ),
         )
 
     def _maybe_dump_replay_sample(
         self,
         obs: Dict[str, np.ndarray],
-        act_id: int,
+        raw_action_id: int,
+        action_id: int,
         probs: Optional[np.ndarray],
+        filter_result: Optional[ActionFilterResult],
         recurrent_input: Dict[str, np.ndarray],
         depth_debug: Dict[str, object],
         depth_msg: Image,
@@ -616,15 +757,32 @@ class FalconRosBridge(object):
     ) -> bool:
         if not self.replay_dump_enabled:
             return False
-        if self.replay_dump_limit >= 0 and self._replay_dump_count >= self.replay_dump_limit:
+        if (
+            self.replay_dump_limit >= 0
+            and self._replay_dump_count >= self.replay_dump_limit
+        ):
             self._replay_dump_limit_reached = True
             return True
 
         stamp_ns = int(rospy.Time.now().to_nsec())
         prefix = "bridge_policy_replay_{}".format(stamp_ns)
-        npz_path = os.path.abspath(os.path.join(self.replay_dump_dir, prefix + ".npz"))
-        meta_path = os.path.abspath(os.path.join(self.replay_dump_dir, prefix + ".json"))
-        action_name = ACTION_NAMES.get(act_id, "action_{}".format(act_id))
+        npz_path = os.path.abspath(
+            os.path.join(self.replay_dump_dir, prefix + ".npz")
+        )
+        meta_path = os.path.abspath(
+            os.path.join(self.replay_dump_dir, prefix + ".json")
+        )
+        action_name = ACTION_NAMES.get(
+            action_id, "action_{}".format(action_id)
+        )
+        raw_action_name = ACTION_NAMES.get(
+            raw_action_id, "action_{}".format(raw_action_id)
+        )
+        filtered_probs = (
+            None
+            if filter_result is None
+            else np.asarray(filter_result.filtered_probs, dtype=np.float32)
+        )
 
         try:
             np.savez_compressed(
@@ -635,8 +793,15 @@ class FalconRosBridge(object):
                 hidden_in=recurrent_input["hidden_in"],
                 prev_action_in=recurrent_input["prev_action_in"],
                 not_done_mask_in=recurrent_input["not_done_mask_in"],
-                action=np.array([act_id], dtype=np.int64),
-                probs=np.array([] if probs is None else probs, dtype=np.float32),
+                action=np.array([action_id], dtype=np.int64),
+                raw_action=np.array([raw_action_id], dtype=np.int64),
+                probs=np.array(
+                    [] if probs is None else probs, dtype=np.float32
+                ),
+                filtered_probs=np.array(
+                    [] if filtered_probs is None else filtered_probs,
+                    dtype=np.float32,
+                ),
             )
             meta = {
                 "prefix": prefix,
@@ -646,10 +811,20 @@ class FalconRosBridge(object):
                 "resolution": int(self.resolution),
                 "max_depth_m": float(self.max_depth_m),
                 "deterministic": bool(self.deterministic),
-                "action_id": int(act_id),
+                "action_id": int(action_id),
                 "action_name": action_name,
+                "raw_action_id": int(raw_action_id),
+                "raw_action_name": raw_action_name,
                 "action_topic": self.action_topic,
                 "action_probs": None if probs is None else probs.tolist(),
+                "filtered_action_probs": (
+                    None if filtered_probs is None else filtered_probs.tolist()
+                ),
+                "action_filter_switched": (
+                    None
+                    if filter_result is None
+                    else bool(filter_result.switched)
+                ),
                 "depth_msg_stamp": depth_msg.header.stamp.to_sec(),
                 "polar_msg_stamp": polar_msg.header.stamp.to_sec(),
                 "polar_r": float(polar_msg.point.x),
@@ -660,13 +835,15 @@ class FalconRosBridge(object):
                 json.dump(meta, f, ensure_ascii=False, indent=2)
             self._replay_dump_count += 1
             rospy.loginfo("[REPLAY_DUMP] saved %s", meta_path)
-            if self.replay_dump_limit >= 0 and self._replay_dump_count >= self.replay_dump_limit:
+            if (
+                self.replay_dump_limit >= 0
+                and self._replay_dump_count >= self.replay_dump_limit
+            ):
                 self._replay_dump_limit_reached = True
                 return True
         except Exception as e:
             rospy.logerr_throttle(1.0, "Policy replay dump failed: %s", str(e))
         return False
-
 
     def _publish_cmd(self, action_id: int):
         msg = Int32()
@@ -674,7 +851,12 @@ class FalconRosBridge(object):
         self.action_pub.publish(msg)
 
     def _publish_stop(self):
-        self._publish_cmd(0)
+        with self.action_state_lock:
+            # Safety stops bypass debounce and become the recovery baseline.
+            self.action_filter.force_action(0)
+            self.safety_stop_generation += 1
+            self.pending_prev_stop = True
+            self._publish_cmd(0)
 
     def _polar_cb(self, polar_msg: PointStamped):
         # 极坐标目标回调只负责缓存，真正推理由深度图回调驱动。
@@ -739,16 +921,59 @@ class FalconRosBridge(object):
             return
         try:
             theta_in = float(polar_msg.point.y)
-            obs, depth_debug = self._build_obs(depth_msg=depth_msg, polar_msg=polar_msg)
+            obs, depth_debug = self._build_obs(
+                depth_msg=depth_msg, polar_msg=polar_msg
+            )
             inference_start = time.perf_counter()
-            act_id, probs, recurrent_input = self._infer_action(obs)
+            with self.action_state_lock:
+                if self.pending_prev_stop:
+                    # Update recurrent state only on the inference thread.
+                    self.prev_actions.fill_(0)
+                    self.pending_prev_stop = False
+                inference_stop_generation = self.safety_stop_generation
+            raw_action_id, probs, recurrent_input = self._infer_action(obs)
+            action_id, filter_result = self._select_executed_action(
+                raw_action_id, probs
+            )
             inference_end = time.perf_counter()
+            with self.action_state_lock:
+                if self.safety_stop_generation != inference_stop_generation:
+                    # A watchdog/error stop won the race while inference was running.
+                    self.action_filter.force_action(0)
+                    self.prev_actions.fill_(0)
+                    self.pending_prev_stop = False
+                    rospy.logwarn_throttle(
+                        1.0,
+                        "Safety stop occurred during inference; discard stale action.",
+                    )
+                    return
+                # Feed back and publish exactly the same executed action.
+                self.prev_actions.fill_(action_id)
+                self._publish_cmd(action_id)
+                # Commit freshness in the same critical section as publication.
+                # Otherwise a watchdog that observed the old timestamp could
+                # publish STOP immediately after this motion command.
+                self.last_obs_time = rospy.Time.now()
+                self.stopped_for_data_timeout = False
+            self._emit_heartbeat()
             if self.debug_mapping or self.debug_depth:
-                self._debug_print_once(obs, act_id, theta_in, probs, depth_debug)
+                self._debug_print_once(
+                    obs,
+                    raw_action_id,
+                    action_id,
+                    theta_in,
+                    probs,
+                    filter_result,
+                    depth_debug,
+                )
+            # Dump only after the command has passed the safety-generation
+            # check and has actually been published as the executed action.
             replay_limit_reached = self._maybe_dump_replay_sample(
                 obs=obs,
-                act_id=act_id,
+                raw_action_id=raw_action_id,
+                action_id=action_id,
                 probs=probs,
+                filter_result=filter_result,
                 recurrent_input=recurrent_input,
                 depth_debug=depth_debug,
                 depth_msg=depth_msg,
@@ -756,17 +981,12 @@ class FalconRosBridge(object):
             )
             if replay_limit_reached:
                 self._publish_stop()
-                self.last_obs_time = rospy.Time.now()
-                self._emit_heartbeat()
                 rospy.loginfo(
                     "[REPLAY_DUMP] reached limit %d, stopping bridge.",
                     self.replay_dump_limit,
                 )
                 rospy.signal_shutdown("Replay dump limit reached.")
                 return
-            self._publish_cmd(act_id)
-            self.last_obs_time = rospy.Time.now()
-            self._emit_heartbeat()
             if self.debug_timing:
                 rospy.loginfo_throttle(
                     2.0,
@@ -777,7 +997,9 @@ class FalconRosBridge(object):
                 )
         except Exception as e:
             self._publish_stop()
-            rospy.logerr_throttle(1.0, "Falcon ROS bridge callback failed: %s", str(e))
+            rospy.logerr_throttle(
+                1.0, "Falcon ROS bridge callback failed: %s", str(e)
+            )
 
     def _cb_depth(self, depth_msg: Image):
         # 每收到一帧深度图，就尝试用时间上最近的目标消息进行一次控制推理。
@@ -785,12 +1007,26 @@ class FalconRosBridge(object):
 
     def _watchdog_cb(self, _event):
         # Fail-safe: stop robot if no successful inference for too long.
-        if self.last_obs_time == rospy.Time(0):
-            return
-        dt = (rospy.Time.now() - self.last_obs_time).to_sec()
-        if dt > self.data_timeout_sec:
-            self._publish_stop()
-            rospy.logwarn_throttle(1.0, "Input timeout %.3fs > %.3fs, publish stop.", dt, self.data_timeout_sec)
+        timed_out = False
+        dt = 0.0
+        with self.action_state_lock:
+            if self.last_obs_time == rospy.Time(0):
+                return
+            dt = (rospy.Time.now() - self.last_obs_time).to_sec()
+            if (
+                dt > self.data_timeout_sec
+                and not self.stopped_for_data_timeout
+            ):
+                self._publish_stop()
+                self.stopped_for_data_timeout = True
+                timed_out = True
+        if timed_out:
+            rospy.logwarn_throttle(
+                1.0,
+                "Input timeout %.3fs > %.3fs, publish stop.",
+                dt,
+                self.data_timeout_sec,
+            )
 
     def spin(self):
         rospy.spin()
@@ -798,18 +1034,33 @@ class FalconRosBridge(object):
 
 def parse_args():
     # 命令行参数用于适配不同 topic、模型结构、速度标定和调试需求。
-    p = argparse.ArgumentParser(description="ROS Depth+Polar -> Falcon discrete action bridge")
+    p = argparse.ArgumentParser(
+        description="ROS Depth+Polar -> Falcon discrete action bridge"
+    )
     p.add_argument("--checkpoint", type=str, required=True)
     # Backward-compatibility flags kept for old launch scripts.
     # They are ignored because this bridge is now fixed to depth + polar topic.
-    p.add_argument("--input_type", type=str, default="depth", choices=["depth", "rgbd"])
-    p.add_argument("--polar_source", type=str, default="topic", choices=["topic", "detections"])
+    p.add_argument(
+        "--input_type", type=str, default="depth", choices=["depth", "rgbd"]
+    )
+    p.add_argument(
+        "--polar_source",
+        type=str,
+        default="topic",
+        choices=["topic", "detections"],
+    )
 
-    p.add_argument("--depth_topic", type=str, default="/camera/depth/image_rect_raw")
+    p.add_argument(
+        "--depth_topic", type=str, default="/camera/depth/image_rect_raw"
+    )
     p.add_argument("--polar_topic", type=str, default="/tag_polar")
-    p.add_argument("--cmd_vel_topic", type=str, default=None, help=argparse.SUPPRESS)
+    p.add_argument(
+        "--cmd_vel_topic", type=str, default=None, help=argparse.SUPPRESS
+    )
     p.add_argument("--action_topic", type=str, default="/falcon/action_id")
-    p.add_argument("--debug_obs_topic", type=str, default="/falcon/obs_heartbeat")
+    p.add_argument(
+        "--debug_obs_topic", type=str, default="/falcon/obs_heartbeat"
+    )
 
     p.add_argument("--resolution", type=int, default=256)
     p.add_argument("--max_depth_m", type=float, default=10.0)
@@ -819,21 +1070,44 @@ def parse_args():
     p.add_argument("--backbone", type=str, default="resnet50")
     p.add_argument("--rnn_type", type=str, default="LSTM")
     p.add_argument("--deterministic", action="store_true")
+    p.add_argument(
+        "--action_filter_enabled",
+        type=str_to_bool,
+        nargs="?",
+        const=True,
+        default=True,
+    )
+    p.add_argument("--action_filter_tau_sec", type=float, default=0.15)
+    p.add_argument("--action_switch_margin", type=float, default=0.10)
+    p.add_argument("--action_switch_hold_sec", type=float, default=0.12)
+    p.add_argument("--stop_switch_hold_sec", type=float, default=0.20)
     p.add_argument("--strict_checkpoint", action="store_true")
     p.add_argument("--debug_mapping", action="store_true")
     p.add_argument("--debug_depth", action="store_true")
     p.add_argument("--debug_timing", action="store_true")
-    p.add_argument("--debug_depth_dump_dir", type=str, default="./test_modules/test_results/bridge_depth_samples")
+    p.add_argument(
+        "--debug_depth_dump_dir",
+        type=str,
+        default="./test_modules/test_results/bridge_depth_samples",
+    )
     p.add_argument("--replay_dump_enabled", action="store_true")
-    p.add_argument("--replay_dump_dir", type=str, default="./test_modules/test_results/bridge_policy_replay")
+    p.add_argument(
+        "--replay_dump_dir",
+        type=str,
+        default="./test_modules/test_results/bridge_policy_replay",
+    )
     p.add_argument("--replay_dump_limit", type=int, default=20)
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)
 
     # Default to non-agent-prefixed keys used by PointNavResNetPolicy sensor handling.
-    p.add_argument("--depth_obs_key", type=str, default="articulated_agent_jaw_depth")
-    p.add_argument("--goal_obs_key", type=str, default="pointgoal_with_gps_compass")
+    p.add_argument(
+        "--depth_obs_key", type=str, default="articulated_agent_jaw_depth"
+    )
+    p.add_argument(
+        "--goal_obs_key", type=str, default="pointgoal_with_gps_compass"
+    )
 
     return p.parse_args()
 

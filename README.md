@@ -32,7 +32,7 @@
 | `2` | 左转 | `Move(0, 0, +turn_speed)` |
 | `3` | 右转 | `Move(0, 0, -turn_speed)` |
 
-策略本身不再负责生成连续速度。速度由动作映射节点统一设置，默认 `forward_speed=0.6`、`turn_speed=0.6`。
+策略输出先经过确定性选择、动作概率 EMA 和切换迟滞，再由动作映射节点转换为速度。映射节点以固定频率执行限加/减速，默认目标速度为 `forward_speed=0.6`、`turn_speed=0.6`。
 
 ## 2. 系统架构
 
@@ -293,7 +293,12 @@ bash start_falcon_bridge.launch \
   --checkpoint /absolute/path/to/model.pth \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
   --polar_topic /tag_polar \
-  --action_topic /falcon/action_id
+  --action_topic /falcon/action_id \
+  --deterministic \
+  --action_filter_tau_sec 0.15 \
+  --action_switch_margin 0.10 \
+  --action_switch_hold_sec 0.12 \
+  --stop_switch_hold_sec 0.20
 ```
 
 检查离散动作和推理心跳：
@@ -303,7 +308,9 @@ rostopic echo /falcon/action_id
 rostopic hz /falcon/obs_heartbeat
 ```
 
-Falcon bridge 由深度帧驱动推理。没有有效 `/tag_polar`、输入时间戳不匹配、回调异常或成功推理超过 `0.3 s` 未更新时，它会发布 Action `0`。
+Falcon bridge 由深度帧驱动推理。`run_bridge.sh` 默认使用确定性 argmax，并对四个动作的概率执行时间型 EMA；新动作持续满足概率优势和确认时间后才会发布。滤波后的实际动作会作为 RNN 下一帧的 `prev_action`。
+
+没有有效 `/tag_polar`、输入时间戳不匹配、回调异常或输入 watchdog 超时时，安全 Action `0` 会绕过 EMA 和确认时间立即发布。`run_bridge.sh` 的 watchdog 默认值为 `0.90 s`；直接运行 Python bridge 时默认值为 `0.3 s`。
 
 ### 5.4 先以 dry-run 验证 Unitree 映射
 
@@ -333,11 +340,13 @@ bash go2/start_action_mapper.sh
 可在 dry-run 下手动验证动作映射：
 
 ```bash
-rostopic pub -1 /falcon/action_id std_msgs/Int32 "data: 1"
-rostopic pub -1 /falcon/action_id std_msgs/Int32 "data: 2"
-rostopic pub -1 /falcon/action_id std_msgs/Int32 "data: 3"
+rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 1"
+rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 2"
+rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 3"
 rostopic pub -1 /falcon/action_id std_msgs/Int32 "data: 0"
 ```
+
+前三条命令每次只运行一条，观察完成后按 `Ctrl-C`；持续发布可以覆盖 `0.3 s` 的动作 watchdog，并完整观察速度爬升过程。
 
 ### 5.5 启用 Go2 实际运动
 
@@ -361,6 +370,8 @@ bash go2/start_action_mapper.sh
 - 收到未知 Action ID。
 - 超过 `ACTION_TIMEOUT_SEC` 未收到新动作。
 - 节点正常退出。
+
+Action `0`、未知动作、watchdog 和退出始终立即停车，不经过速度斜坡。正常的前进/左转/右转及其相互切换会在 `WATCHDOG_RATE_HZ` 控制循环中按线速度和角速度加减速限制渐变。
 
 默认不会在启动时自动执行 `BalanceStand()`。如确有需要，可设置：
 
@@ -415,7 +426,23 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `FORWARD_SPEED` | `0.6` | 前进速度 |
 | `TURN_SPEED` | `0.6` | 转向角速度 |
 | `ACTION_TIMEOUT_SEC` | `0.3` | 动作流 watchdog |
+| `WATCHDOG_RATE_HZ` | `20.0` | watchdog 与速度斜坡控制频率 |
+| `VELOCITY_SMOOTHING_ENABLED` | `true` | 启用目标速度限加/减速 |
+| `LINEAR_ACCEL_LIMIT` | `1.0` | 线加速度上限，单位 `m/s²` |
+| `LINEAR_DECEL_LIMIT` | `1.5` | 线减速度上限，单位 `m/s²` |
+| `YAW_ACCEL_LIMIT` | `2.0` | 角加速度上限，单位 `rad/s²` |
+| `YAW_DECEL_LIMIT` | `3.0` | 角减速度上限，单位 `rad/s²` |
 | `UNITREE_DRY_RUN` | `false` | 只记录命令，不控制机器人 |
+
+### Falcon 动作滤波
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ACTION_FILTER_ENABLED` | `true` | 对 categorical 动作概率启用 EMA 与迟滞 |
+| `ACTION_FILTER_TAU_SEC` | `0.15` | EMA 时间常数；越大越平滑，但响应越慢 |
+| `ACTION_SWITCH_MARGIN` | `0.10` | 新动作相对当前动作所需的概率优势 |
+| `ACTION_SWITCH_HOLD_SEC` | `0.12` | 普通动作切换确认时间 |
+| `STOP_SWITCH_HOLD_SEC` | `0.20` | 策略 STOP 的确认时间；安全 STOP 不受此参数影响 |
 
 ## 8. 故障排查
 
@@ -464,10 +491,11 @@ bash start_falcon_bridge.launch \
 
 ### Go2 一直收到停止动作
 
-- Falcon bridge 的输入 watchdog 默认为 `0.3 s`。
+- `run_bridge.sh` 的 Falcon 输入 watchdog 默认为 `0.90 s`；直接运行 bridge 时为 `0.3 s`。
 - 动作映射节点的 watchdog 也默认为 `0.3 s`。
 - 原始 RGB-D 图像带宽较高；优先使用稳定的有线网络或高质量无线网络，并检查 `rostopic hz` 是否持续。
-- 不要在未验证前放宽 watchdog。应先定位相机掉帧、网络拥塞或推理延迟。
+- 检查 mapper 日志中是否出现 `No action for ... stopping Go2`，并测量 `/falcon/action_id` 的最大或 p99 间隔，不要只看平均频率。
+- 不要在未验证前放宽 watchdog。应先定位相机掉帧、网络拥塞或推理延迟；确需调整时，应让 mapper timeout 大于动作间隔的 p99 加安全裕量，同时评估失联后继续运动更久的风险。
 
 ### 左右方向相反或目标中心有固定偏差
 
@@ -486,7 +514,8 @@ ranger_ws/src/go_nav/
     ├── polar_goal_tracker.py
     └── unitree_action_mapper.py
 
-sensor/falcon_ros_bridge.py              # 深度 + 目标 → Falcon → Action ID
+sensor/action_filter.py                  # 动作概率 EMA、迟滞与 STOP 确认
+sensor/falcon_ros_bridge.py              # 深度 + 目标 → Falcon → 滤波后 Action ID
 start_detection.sh                       # 简单目标检测入口
 start_detection_full.sh                  # 完整目标跟踪入口
 run_bridge.sh                            # 默认 Falcon 实机推理入口

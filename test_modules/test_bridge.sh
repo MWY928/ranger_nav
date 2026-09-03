@@ -33,12 +33,23 @@ mkdir -p "$RESULTS_DIR"
 #   policy replay .npz/.json files.
 ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
 DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/depth/image_rect_raw}"
+ACTION_FILTER_ENABLED="${ACTION_FILTER_ENABLED:-true}"
+ACTION_FILTER_TAU_SEC="${ACTION_FILTER_TAU_SEC:-0.15}"
+ACTION_SWITCH_MARGIN="${ACTION_SWITCH_MARGIN:-0.10}"
+ACTION_SWITCH_HOLD_SEC="${ACTION_SWITCH_HOLD_SEC:-0.12}"
+STOP_SWITCH_HOLD_SEC="${STOP_SWITCH_HOLD_SEC:-0.20}"
 
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm2.pth" \
   --depth_topic "$DEPTH_TOPIC" \
   --polar_topic /tag_polar \
   --action_topic "$ACTION_TOPIC" \
+  --deterministic \
+  --action_filter_enabled "$ACTION_FILTER_ENABLED" \
+  --action_filter_tau_sec "$ACTION_FILTER_TAU_SEC" \
+  --action_switch_margin "$ACTION_SWITCH_MARGIN" \
+  --action_switch_hold_sec "$ACTION_SWITCH_HOLD_SEC" \
+  --stop_switch_hold_sec "$STOP_SWITCH_HOLD_SEC" \
   --debug_mapping \
   --debug_depth \
   --debug_depth_dump_dir "$RESULTS_DIR/bridge_depth_samples"

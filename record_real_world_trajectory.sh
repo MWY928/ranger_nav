@@ -9,7 +9,7 @@
 # This script records:
 #   1. Goal polar coordinates: distance r in meters and angle theta in radians
 #   2. Depth observations in meters
-#   3. Policy actions and action probabilities
+#   3. Raw policy actions, filtered/executed actions, and both probability vectors
 #
 # Notes:
 #   - Replay dumping can be used for later replay/ sim-real comparison.
@@ -37,12 +37,23 @@ echo "Replay dump limit: $REPLAY_DUMP_LIMIT"
 
 ACTION_TOPIC="${ACTION_TOPIC:-/falcon/action_id}"
 DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/depth/image_rect_raw}"
+ACTION_FILTER_ENABLED="${ACTION_FILTER_ENABLED:-true}"
+ACTION_FILTER_TAU_SEC="${ACTION_FILTER_TAU_SEC:-0.15}"
+ACTION_SWITCH_MARGIN="${ACTION_SWITCH_MARGIN:-0.10}"
+ACTION_SWITCH_HOLD_SEC="${ACTION_SWITCH_HOLD_SEC:-0.12}"
+STOP_SWITCH_HOLD_SEC="${STOP_SWITCH_HOLD_SEC:-0.20}"
 
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$CHECKPOINT" \
   --depth_topic "$DEPTH_TOPIC" \
   --polar_topic /tag_polar \
   --action_topic "$ACTION_TOPIC" \
+  --deterministic \
+  --action_filter_enabled "$ACTION_FILTER_ENABLED" \
+  --action_filter_tau_sec "$ACTION_FILTER_TAU_SEC" \
+  --action_switch_margin "$ACTION_SWITCH_MARGIN" \
+  --action_switch_hold_sec "$ACTION_SWITCH_HOLD_SEC" \
+  --stop_switch_hold_sec "$STOP_SWITCH_HOLD_SEC" \
   --debug_mapping \
   --debug_depth \
   --debug_depth_dump_dir "$DEBUG_DEPTH_DUMP_DIR" \
