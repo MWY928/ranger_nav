@@ -32,7 +32,7 @@ from gym.spaces import Box
 from gym.spaces import Dict as SpaceDict
 from gym.spaces import Discrete
 from sensor_msgs.msg import Image
-from std_msgs.msg import Header, Int32
+from std_msgs.msg import Header, Int32, UInt8
 
 import sys
 
@@ -59,6 +59,15 @@ ACTION_NAMES = {
     2: "left",
     3: "right",
 }
+
+# These two actions are handled only by the Unitree action mapper. They are
+# intentionally kept out of ACTION_NAMES and out of the policy/action filter,
+# whose action space must remain Discrete(4).
+SEARCH_LEFT_ACTION_ID = 4
+SEARCH_RIGHT_ACTION_ID = 5
+TRACKING_STATE_VISIBLE = 1
+TRACKING_STATE_PREDICTING = 2
+TRACKING_STATE_SEARCHABLE = 3
 
 
 def str_to_bool(value):
@@ -179,6 +188,27 @@ class FalconRosBridge(object):
         self.safety_stop_generation = 0
         self.pending_prev_stop = False
 
+        # Search is an explicit safety-gated override, not a policy action.
+        # A new transition into SEARCHABLE arms one bounded search episode;
+        # repeated state=3 heartbeats cannot restart an expired episode.
+        self.tag_search_enabled = bool(args.tag_search_enabled)
+        self.tracking_state_timeout_sec = max(
+            0.05, float(args.tracking_state_timeout_sec)
+        )
+        self.tag_search_timeout_sec = max(0.0, float(args.tag_search_timeout_sec))
+        self.tag_search_default_action = (
+            SEARCH_LEFT_ACTION_ID
+            if args.tag_search_default_direction == "left"
+            else SEARCH_RIGHT_ACTION_ID
+        )
+        self.tracking_state = 0
+        self.tracking_state_receive_time = None
+        self.have_seen_visible_tracking_state = False
+        self.search_active = False
+        self.search_started_at = None
+        self.search_action_id = self.tag_search_default_action
+        self.search_rearm_required = False
+
         # Policy obs keys should match your social_nav_v2 config.
         # 这些 key 必须和训练 Falcon/PointNav 模型时的 observation space 的key一致。
         self.depth_key = args.depth_obs_key
@@ -233,6 +263,12 @@ class FalconRosBridge(object):
         self.depth_sub = rospy.Subscriber(
             args.depth_topic, Image, self._cb_depth, queue_size=1
         )
+        self.tracking_state_sub = rospy.Subscriber(
+            args.tracking_state_topic,
+            UInt8,
+            self._tracking_state_cb,
+            queue_size=10,
+        )
 
         if self.debug_depth:
             os.makedirs(self.debug_depth_dump_dir, exist_ok=True)
@@ -246,6 +282,15 @@ class FalconRosBridge(object):
         rospy.loginfo("Falcon ROS bridge started.")
         rospy.loginfo("Subscribe: %s, %s", args.depth_topic, args.polar_topic)
         rospy.loginfo("Publish action_id: %s", self.action_topic)
+        rospy.loginfo(
+            "Tag search: enabled=%s state_topic=%s state_timeout=%.2fs "
+            "search_timeout=%.2fs fallback=%s",
+            self.tag_search_enabled,
+            args.tracking_state_topic,
+            self.tracking_state_timeout_sec,
+            self.tag_search_timeout_sec,
+            args.tag_search_default_direction,
+        )
         rospy.loginfo(
             "Action filter: enabled=%s tau=%.3fs margin=%.3f "
             "switch_hold=%.3fs stop_hold=%.3fs deterministic=%s",
@@ -858,14 +903,178 @@ class FalconRosBridge(object):
             self.pending_prev_stop = True
             self._publish_cmd(0)
 
+    def _reset_recurrent_state_locked(self):
+        '''Reset policy history only while the inference thread owns the lock.'''
+        self.prev_actions.fill_(0)
+        hidden_states = getattr(self, 'hidden_states', None)
+        if hidden_states is not None and hasattr(hidden_states, 'zero_'):
+            hidden_states.zero_()
+        not_done_masks = getattr(self, 'not_done_masks', None)
+        if not_done_masks is not None and hasattr(not_done_masks, 'fill_'):
+            not_done_masks.fill_(False)
+        self.pending_prev_stop = False
+
+    def _choose_search_action_locked(self):
+        polar_msg = self.latest_polar_msg
+        if polar_msg is not None:
+            try:
+                theta = float(polar_msg.point.y)
+                if np.isfinite(theta) and theta != 0.0:
+                    return (
+                        SEARCH_LEFT_ACTION_ID
+                        if theta > 0.0
+                        else SEARCH_RIGHT_ACTION_ID
+                    )
+            except (AttributeError, TypeError, ValueError):
+                pass
+        return self.tag_search_default_action
+
+    def _tracking_state_cb(self, state_msg: UInt8):
+        '''Arm/leave search only on explicit tracker state transitions.'''
+        state = int(state_msg.data)
+        now = time.monotonic()
+        log_event = None
+        with self.action_state_lock:
+            previous_state = self.tracking_state
+            self.tracking_state = state
+            self.tracking_state_receive_time = now
+
+            if state == TRACKING_STATE_VISIBLE:
+                self.have_seen_visible_tracking_state = True
+                # A real tag observation is required to rearm after any
+                # expired or interrupted search episode.
+                self.search_rearm_required = False
+
+            if state != TRACKING_STATE_SEARCHABLE:
+                if (
+                    state != TRACKING_STATE_VISIBLE
+                    and previous_state == TRACKING_STATE_SEARCHABLE
+                ):
+                    self.search_rearm_required = True
+
+                if (
+                    previous_state == TRACKING_STATE_SEARCHABLE
+                    or self.search_active
+                ):
+                    self.search_active = False
+                    self.search_started_at = None
+                    self._publish_stop()
+                    log_event = (
+                        'Tag search exited; publish STOP before policy resumes.'
+                    )
+            elif previous_state != TRACKING_STATE_SEARCHABLE:
+                # Entering search always publishes STOP first. The next fresh
+                # depth frame may publish the dedicated low-speed turn action.
+                self.search_action_id = self._choose_search_action_locked()
+                self.search_started_at = now
+                self.search_active = (
+                    self.tag_search_enabled
+                    and self.have_seen_visible_tracking_state
+                    and not self.search_rearm_required
+                )
+                self._publish_stop()
+                if self.search_active:
+                    direction = (
+                        'left'
+                        if self.search_action_id == SEARCH_LEFT_ACTION_ID
+                        else 'right'
+                    )
+                    log_event = (
+                        'Tag search armed (%s); entry STOP published.'
+                        % direction
+                    )
+                elif not self.tag_search_enabled:
+                    log_event = (
+                        'Tracker requested tag search, but search is disabled; '
+                        'hold STOP.'
+                    )
+                else:
+                    log_event = (
+                        'Tag search remains disarmed until a visible-tag '
+                        'state is received.'
+                    )
+
+        if log_event is not None:
+            rospy.logwarn(log_event)
+
+    def _handle_search_for_depth(self):
+        '''Gate policy input and, when armed, publish one search command.'''
+        now = time.monotonic()
+        stop_reason = None
+        search_action_id = None
+        search_age = 0.0
+        with self.action_state_lock:
+            state_age = (
+                float('inf')
+                if self.tracking_state_receive_time is None
+                else now - self.tracking_state_receive_time
+            )
+
+            if self.tracking_state != TRACKING_STATE_SEARCHABLE:
+                # Enabling search also enables the tracker-state safety gate.
+                # With search disabled, legacy depth+polar operation is kept.
+                if not self.tag_search_enabled:
+                    return False
+                if state_age > self.tracking_state_timeout_sec:
+                    stop_reason = 'Tag tracking state is stale; hold STOP.'
+                elif self.tracking_state not in (
+                    TRACKING_STATE_VISIBLE,
+                    TRACKING_STATE_PREDICTING,
+                ):
+                    stop_reason = 'Tag tracker is not ready; hold STOP.'
+                else:
+                    return False
+            elif not self.tag_search_enabled or not self.search_active:
+                # SEARCHABLE owns control even if opt-in is disabled; old polar
+                # data must never fall through into policy inference.
+                return True
+            else:
+                search_age = (
+                    float('inf')
+                    if self.search_started_at is None
+                    else now - self.search_started_at
+                )
+                if state_age > self.tracking_state_timeout_sec:
+                    stop_reason = 'Tag tracking state became stale; stop search.'
+                elif search_age > self.tag_search_timeout_sec:
+                    stop_reason = 'Tag search timeout reached; stop search.'
+                else:
+                    search_action_id = self.search_action_id
+
+            if stop_reason is not None:
+                if self.tracking_state == TRACKING_STATE_SEARCHABLE:
+                    self.search_active = False
+                    self.search_rearm_required = True
+                self._publish_stop()
+                self.stopped_for_data_timeout = True
+            elif search_action_id is not None:
+                # Search IDs never touch prev_actions or the 4-action filter.
+                self._publish_cmd(search_action_id)
+                self.last_obs_time = rospy.Time.now()
+                self.stopped_for_data_timeout = False
+
+        if stop_reason is not None:
+            rospy.logwarn_throttle(1.0, stop_reason)
+        elif search_action_id is not None:
+            rospy.loginfo_throttle(
+                2.0,
+                'Searching for tag with action_id=%d (elapsed %.2fs).',
+                search_action_id,
+                search_age,
+            )
+        return True
+
     def _polar_cb(self, polar_msg: PointStamped):
         # 极坐标目标回调只负责缓存，真正推理由深度图回调驱动。
-        self.latest_polar_msg = polar_msg
-        self.polar_buffer.append(polar_msg)
+        with self.action_state_lock:
+            self.latest_polar_msg = polar_msg
+            self.polar_buffer.append(polar_msg)
 
     def _pick_polar_for_stamp(self, target_stamp: rospy.Time):
         # Pick the temporally closest polar message to current image timestamp.
-        if len(self.polar_buffer) == 0:
+        with self.action_state_lock:
+            polar_messages = list(self.polar_buffer)
+        if len(polar_messages) == 0:
             rospy.logwarn_throttle(
                 2.0,
                 "Polar buffer is empty: no /tag_polar message has reached Falcon yet.",
@@ -874,10 +1083,8 @@ class FalconRosBridge(object):
 
         # If image has no timestamp, fallback to latest.
         if target_stamp == rospy.Time():
-            return self.polar_buffer[-1]
+            return polar_messages[-1]
 
-        # Snapshot the deque because the polar subscriber may append concurrently.
-        polar_messages = list(self.polar_buffer)
         best = None
         best_dt = None
         for msg in polar_messages:
@@ -889,7 +1096,7 @@ class FalconRosBridge(object):
                 best = msg
 
         if best is None:
-            return self.polar_buffer[-1]
+            return polar_messages[-1]
         if best_dt is not None and best_dt > self.max_polar_age_sec:
             rospy.logwarn_throttle(
                 2.0,
@@ -914,6 +1121,8 @@ class FalconRosBridge(object):
     def _process_one(self, depth_msg: Image, polar_msg: PointStamped = None):
         # Single end-to-end control step: select goal -> build obs -> infer -> publish cmd.
         step_start = time.perf_counter()
+        if self._handle_search_for_depth():
+            return
         if polar_msg is None:
             polar_msg = self._pick_polar_for_stamp(depth_msg.header.stamp)
         if polar_msg is None:
@@ -928,8 +1137,7 @@ class FalconRosBridge(object):
             with self.action_state_lock:
                 if self.pending_prev_stop:
                     # Update recurrent state only on the inference thread.
-                    self.prev_actions.fill_(0)
-                    self.pending_prev_stop = False
+                    self._reset_recurrent_state_locked()
                 inference_stop_generation = self.safety_stop_generation
             raw_action_id, probs, recurrent_input = self._infer_action(obs)
             action_id, filter_result = self._select_executed_action(
@@ -940,8 +1148,7 @@ class FalconRosBridge(object):
                 if self.safety_stop_generation != inference_stop_generation:
                     # A watchdog/error stop won the race while inference was running.
                     self.action_filter.force_action(0)
-                    self.prev_actions.fill_(0)
-                    self.pending_prev_stop = False
+                    self._reset_recurrent_state_locked()
                     rospy.logwarn_throttle(
                         1.0,
                         "Safety stop occurred during inference; discard stale action.",
@@ -1008,18 +1215,56 @@ class FalconRosBridge(object):
     def _watchdog_cb(self, _event):
         # Fail-safe: stop robot if no successful inference for too long.
         timed_out = False
+        search_stop_reason = None
         dt = 0.0
+        now_monotonic = time.monotonic()
         with self.action_state_lock:
-            if self.last_obs_time == rospy.Time(0):
-                return
-            dt = (rospy.Time.now() - self.last_obs_time).to_sec()
             if (
-                dt > self.data_timeout_sec
-                and not self.stopped_for_data_timeout
+                self.tracking_state == TRACKING_STATE_SEARCHABLE
+                and self.search_active
             ):
-                self._publish_stop()
-                self.stopped_for_data_timeout = True
-                timed_out = True
+                state_age = (
+                    float('inf')
+                    if self.tracking_state_receive_time is None
+                    else now_monotonic - self.tracking_state_receive_time
+                )
+                search_age = (
+                    float('inf')
+                    if self.search_started_at is None
+                    else now_monotonic - self.search_started_at
+                )
+                if state_age > self.tracking_state_timeout_sec:
+                    search_stop_reason = (
+                        'Tag tracking state timeout %.3fs > %.3fs; stop search.'
+                        % (state_age, self.tracking_state_timeout_sec)
+                    )
+                elif search_age > self.tag_search_timeout_sec:
+                    search_stop_reason = (
+                        'Tag search timeout %.3fs > %.3fs; stop search.'
+                        % (search_age, self.tag_search_timeout_sec)
+                    )
+                if search_stop_reason is not None:
+                    self.search_active = False
+                    self.search_rearm_required = True
+                    self._publish_stop()
+                    self.stopped_for_data_timeout = True
+
+            if search_stop_reason is None:
+                if self.last_obs_time == rospy.Time(0):
+                    return
+                dt = (rospy.Time.now() - self.last_obs_time).to_sec()
+                if (
+                    dt > self.data_timeout_sec
+                    and not self.stopped_for_data_timeout
+                ):
+                    if self.tracking_state == TRACKING_STATE_SEARCHABLE:
+                        self.search_active = False
+                        self.search_rearm_required = True
+                    self._publish_stop()
+                    self.stopped_for_data_timeout = True
+                    timed_out = True
+        if search_stop_reason is not None:
+            rospy.logwarn_throttle(1.0, search_stop_reason)
         if timed_out:
             rospy.logwarn_throttle(
                 1.0,
@@ -1054,6 +1299,9 @@ def parse_args():
         "--depth_topic", type=str, default="/camera/depth/image_rect_raw"
     )
     p.add_argument("--polar_topic", type=str, default="/tag_polar")
+    p.add_argument(
+        "--tracking_state_topic", type=str, default="/tag_tracking_state"
+    )
     p.add_argument(
         "--cmd_vel_topic", type=str, default=None, help=argparse.SUPPRESS
     )
@@ -1100,6 +1348,21 @@ def parse_args():
     p.add_argument("--data_timeout_sec", type=float, default=0.3)
     p.add_argument("--max_polar_age_sec", type=float, default=0.12)
     p.add_argument("--polar_buffer_size", type=int, default=100)
+    p.add_argument(
+        "--tag_search_enabled",
+        type=str_to_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Enable the bounded tracker-requested turn-in-place search.",
+    )
+    p.add_argument("--tracking_state_timeout_sec", type=float, default=0.5)
+    p.add_argument("--tag_search_timeout_sec", type=float, default=12.0)
+    p.add_argument(
+        "--tag_search_default_direction",
+        choices=["left", "right"],
+        default="left",
+    )
 
     # Default to non-agent-prefixed keys used by PointNavResNetPolicy sensor handling.
     p.add_argument(

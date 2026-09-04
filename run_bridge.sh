@@ -27,6 +27,11 @@ ACTION_FILTER_TAU_SEC="${ACTION_FILTER_TAU_SEC:-0.15}"
 ACTION_SWITCH_MARGIN="${ACTION_SWITCH_MARGIN:-0.10}"
 ACTION_SWITCH_HOLD_SEC="${ACTION_SWITCH_HOLD_SEC:-0.12}"
 STOP_SWITCH_HOLD_SEC="${STOP_SWITCH_HOLD_SEC:-0.20}"
+TAG_SEARCH_ENABLED="${TAG_SEARCH_ENABLED:-false}"
+TRACKING_STATE_TOPIC="${TRACKING_STATE_TOPIC:-/tag_tracking_state}"
+TRACKING_STATE_TIMEOUT_SEC="${TRACKING_STATE_TIMEOUT_SEC:-0.50}"
+TAG_SEARCH_TIMEOUT_SEC="${TAG_SEARCH_TIMEOUT_SEC:-12.0}"
+TAG_SEARCH_DEFAULT_DIRECTION="${TAG_SEARCH_DEFAULT_DIRECTION:-left}"
 
 echo "Depth topic:               $DEPTH_TOPIC"
 echo "Polar topic:               /tag_polar"
@@ -38,6 +43,11 @@ echo "Action filter tau:         $ACTION_FILTER_TAU_SEC s"
 echo "Action switch margin:      $ACTION_SWITCH_MARGIN"
 echo "Action switch hold:        $ACTION_SWITCH_HOLD_SEC s"
 echo "Stop switch hold:          $STOP_SWITCH_HOLD_SEC s"
+echo "Tag search enabled:        $TAG_SEARCH_ENABLED"
+echo "Tracking state topic:      $TRACKING_STATE_TOPIC"
+echo "Tracking state timeout:    $TRACKING_STATE_TIMEOUT_SEC s"
+echo "Tag search timeout:        $TAG_SEARCH_TIMEOUT_SEC s"
+echo "Tag search fallback:       $TAG_SEARCH_DEFAULT_DIRECTION"
 
 exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --checkpoint "$REPO_ROOT/weights/falcon_bc_70traj_action_head_lstm0045.pth" \
@@ -53,5 +63,10 @@ exec python "$REPO_ROOT/sensor/falcon_ros_bridge.py" \
   --action_switch_margin "$ACTION_SWITCH_MARGIN" \
   --action_switch_hold_sec "$ACTION_SWITCH_HOLD_SEC" \
   --stop_switch_hold_sec "$STOP_SWITCH_HOLD_SEC" \
+  --tag_search_enabled "$TAG_SEARCH_ENABLED" \
+  --tracking_state_topic "$TRACKING_STATE_TOPIC" \
+  --tracking_state_timeout_sec "$TRACKING_STATE_TIMEOUT_SEC" \
+  --tag_search_timeout_sec "$TAG_SEARCH_TIMEOUT_SEC" \
+  --tag_search_default_direction "$TAG_SEARCH_DEFAULT_DIRECTION" \
   --debug_timing \
   --debug_mapping

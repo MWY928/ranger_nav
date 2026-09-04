@@ -45,6 +45,7 @@ UNITREE_DOMAIN_ID="${UNITREE_DOMAIN_ID:-0}"
 UNITREE_TIMEOUT_SEC="${UNITREE_TIMEOUT_SEC:-10.0}"
 FORWARD_SPEED="${FORWARD_SPEED:-0.6}"
 TURN_SPEED="${TURN_SPEED:-0.6}"
+SEARCH_TURN_SPEED="${SEARCH_TURN_SPEED:-0.25}"
 ACTION_TIMEOUT_SEC="${ACTION_TIMEOUT_SEC:-0.3}"
 WATCHDOG_RATE_HZ="${WATCHDOG_RATE_HZ:-20.0}"
 VELOCITY_SMOOTHING_ENABLED="${VELOCITY_SMOOTHING_ENABLED:-true}"
@@ -86,6 +87,7 @@ echo "Unitree network interface: $UNITREE_NETWORK_INTERFACE"
 echo "Unitree dry run:           $UNITREE_DRY_RUN"
 echo "Control/watchdog rate:     $WATCHDOG_RATE_HZ Hz"
 echo "Velocity smoothing:        $VELOCITY_SMOOTHING_ENABLED"
+echo "Normal/search turn speed:  $TURN_SPEED / $SEARCH_TURN_SPEED rad/s"
 echo "Linear accel/decel:        $LINEAR_ACCEL_LIMIT / $LINEAR_DECEL_LIMIT m/s^2"
 echo "Yaw accel/decel:           $YAW_ACCEL_LIMIT / $YAW_DECEL_LIMIT rad/s^2"
 
@@ -96,6 +98,7 @@ exec "$PYTHON_EXECUTABLE" "$MAPPER_SCRIPT" \
   --sdk_timeout_sec "$UNITREE_TIMEOUT_SEC" \
   --forward_speed "$FORWARD_SPEED" \
   --turn_speed "$TURN_SPEED" \
+  --search_turn_speed "$SEARCH_TURN_SPEED" \
   --action_timeout_sec "$ACTION_TIMEOUT_SEC" \
   --watchdog_rate_hz "$WATCHDOG_RATE_HZ" \
   --smoothing_enabled "$VELOCITY_SMOOTHING_ENABLED" \

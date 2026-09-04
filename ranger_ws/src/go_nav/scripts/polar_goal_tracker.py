@@ -8,6 +8,13 @@ import rospy
 from apriltag_ros.msg import AprilTagDetectionArray
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
+from std_msgs.msg import UInt8
+
+
+TRACKING_NOT_READY = 0
+TRACKING_VISIBLE = 1
+TRACKING_PREDICTING = 2
+TRACKING_SEARCHABLE = 3
 
 
 def get_bool_param(name, default=False):
@@ -53,6 +60,9 @@ class SimplePolarGoalTracker(object):
         self.detections_topic = rospy.get_param("~detections_topic", "/tag_detections")
         self.output_topic = rospy.get_param("~output_topic", "/tag_polar")
         self.output_frame_id = rospy.get_param("~output_frame_id", "base_link")
+        self.tracking_state_topic = rospy.get_param(
+            "~tracking_state_topic", "/tag_tracking_state"
+        )
 
         self.target_tag_id = int(rospy.get_param("~target_tag_id", 0))
         self.use_first_detection = get_bool_param("~use_first_detection", False)
@@ -70,8 +80,24 @@ class SimplePolarGoalTracker(object):
         self.use_odom_fallback = get_bool_param("~use_odom_fallback", False)
         self.odom_topic = rospy.get_param("~odom_topic", "/go2/sport_odom")
         self.lost_timeout_sec = float(rospy.get_param("~lost_timeout_sec", 0.12))
-        self.predict_timeout_sec = float(rospy.get_param("~predict_timeout_sec", 1.0))
-        self.publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 20.0))
+        self.predict_timeout_sec = max(
+            self.lost_timeout_sec,
+            float(rospy.get_param("~predict_timeout_sec", 6.0)),
+        )
+        self.publish_rate_hz = max(
+            1.0, float(rospy.get_param("~publish_rate_hz", 15.0))
+        )
+        self.reacquire_reset_sec = max(
+            0.0, float(rospy.get_param("~reacquire_reset_sec", 1.0))
+        )
+        self.detection_stream_timeout_sec = max(
+            0.0,
+            float(rospy.get_param("~detection_stream_timeout_sec", 0.5)),
+        )
+        self.search_enabled = get_bool_param("~search_enabled", False)
+        self.search_timeout_sec = max(
+            0.0, float(rospy.get_param("~search_timeout_sec", 12.0))
+        )
         self.alpha = max(0.0, min(1.0, float(rospy.get_param("~alpha", 0.5))))
         self.odom_timeout_sec = float(rospy.get_param("~odom_timeout_sec", 0.25))
         self.max_odom_jump_m = float(rospy.get_param("~max_odom_jump_m", 0.75))
@@ -93,8 +119,14 @@ class SimplePolarGoalTracker(object):
         self.last_tag_id = -1
         self.last_detection_time = rospy.Time(0)
         self.last_detection_receive_time = rospy.Time(0)
+        self.last_detection_array_stamp = rospy.Time(0)
+        self.last_detection_array_receive_time = rospy.Time(0)
+        self.last_tracking_state = TRACKING_NOT_READY
 
         self.pub = rospy.Publisher(self.output_topic, PointStamped, queue_size=10)
+        self.tracking_state_pub = rospy.Publisher(
+            self.tracking_state_topic, UInt8, queue_size=10
+        )
         self.sub_det = rospy.Subscriber(
             self.detections_topic,
             AprilTagDetectionArray,
@@ -103,7 +135,6 @@ class SimplePolarGoalTracker(object):
         )
 
         self.sub_odom = None
-        self.timer = None
         if self.use_odom_fallback:
             self.sub_odom = rospy.Subscriber(
                 self.odom_topic,
@@ -111,14 +142,15 @@ class SimplePolarGoalTracker(object):
                 self.odom_cb,
                 queue_size=1,
             )
-            self.timer = rospy.Timer(
-                rospy.Duration(1.0 / max(self.publish_rate_hz, 1.0)),
-                self.timer_cb,
-            )
+        self.timer = rospy.Timer(
+            rospy.Duration(1.0 / self.publish_rate_hz),
+            self.timer_cb,
+        )
 
         rospy.loginfo("simple_polar_goal_tracker started.")
         rospy.loginfo("detections_topic: %s", self.detections_topic)
         rospy.loginfo("output_topic:     %s", self.output_topic)
+        rospy.loginfo("tracking_state:   %s", self.tracking_state_topic)
         rospy.loginfo("output_frame_id:  %s", self.output_frame_id)
         rospy.loginfo(
             "target_tag_id=%d use_first_detection=%s",
@@ -147,6 +179,17 @@ class SimplePolarGoalTracker(object):
             rospy.loginfo("odom_topic:       %s", self.odom_topic)
             rospy.loginfo("alpha:            %.3f", self.alpha)
             rospy.loginfo("odom_timeout_sec: %.3f", self.odom_timeout_sec)
+            rospy.loginfo(
+                "prediction:      %.2f-%.2f s at %.1f Hz",
+                self.lost_timeout_sec,
+                self.predict_timeout_sec,
+                self.publish_rate_hz,
+            )
+            rospy.loginfo(
+                "search state:    enabled=%s timeout=%.2f s",
+                self.search_enabled,
+                self.search_timeout_sec,
+            )
 
     def odom_cb(self, msg):
         robot_x = float(msg.pose.pose.position.x)
@@ -235,15 +278,37 @@ class SimplePolarGoalTracker(object):
         return rospy.Time.now()
 
     def detection_cb(self, msg):
+        receive_time = rospy.Time.now()
+        array_stamp = msg.header.stamp
+        with self.state_lock:
+            # apriltag_ros keeps publishing empty arrays while the image stream
+            # is alive. Retain every array timestamp so occlusion predictions
+            # stay on the camera clock rather than the ROS host clock.
+            if array_stamp == rospy.Time():
+                if (
+                    self.last_detection_array_stamp != rospy.Time(0)
+                    and self.last_detection_array_receive_time != rospy.Time(0)
+                ):
+                    elapsed = (
+                        receive_time - self.last_detection_array_receive_time
+                    ).to_sec()
+                    array_stamp = self.last_detection_array_stamp + (
+                        rospy.Duration.from_sec(max(0.0, elapsed))
+                    )
+            if array_stamp != rospy.Time():
+                self.last_detection_array_stamp = array_stamp
+            self.last_detection_array_receive_time = receive_time
+
         det, tag_id = self.select_detection(msg)
         if det is None:
             return
 
         r, theta, px, pz, raw_r, theta_for_estimate = self.compute_polar(det)
         stamp = self.pick_stamp(msg, det)
-        receive_time = rospy.Time.now()
 
         with self.state_lock:
+            if self.last_detection_array_stamp == rospy.Time(0):
+                self.last_detection_array_stamp = stamp
             reset_estimate = self.last_detection_receive_time == rospy.Time(0)
             if not reset_estimate:
                 detection_gap = (
@@ -251,20 +316,37 @@ class SimplePolarGoalTracker(object):
                 ).to_sec()
                 reset_estimate = (
                     detection_gap < 0.0
-                    or detection_gap > self.predict_timeout_sec
+                    or detection_gap > self.reacquire_reset_sec
                 )
             self.last_detection_time = stamp
             self.last_detection_receive_time = receive_time
             self.last_tag_id = tag_id
 
-            if self.use_odom_fallback and self.have_odom:
-                # Cache the physical tag position. distance_offset is a desired
-                # stopping offset and deadband is an output behavior; neither
-                # should distort the world-frame tag estimate.
-                self.update_tag_estimate_from_polar(
-                    raw_r, theta_for_estimate, reset=reset_estimate
+            if self.use_odom_fallback:
+                odom_age = (receive_time - self.last_odom_receive_time).to_sec()
+                odom_is_fresh = (
+                    self.have_odom
+                    and 0.0 <= odom_age <= self.odom_timeout_sec
                 )
+                if odom_is_fresh:
+                    # distance_offset and deadband are output behavior; neither
+                    # should distort the physical world-frame tag position.
+                    self.update_tag_estimate_from_polar(
+                        raw_r, theta_for_estimate, reset=reset_estimate
+                    )
+                else:
+                    # Do not later combine a new visual observation with an old
+                    # robot pose. A fresh visual+odom pair will recreate it.
+                    self.have_tag_estimate = False
+                    rospy.logwarn_throttle(
+                        1.0,
+                        "Tag visible but odometry is unavailable/stale; "
+                        "odometry fallback is not armed.",
+                    )
 
+        # Exiting search must reach the controller before a new target can
+        # resume policy motion.
+        self.publish_tracking_state(TRACKING_VISIBLE)
         self.publish_polar(r, theta, tag_id, stamp)
 
         rospy.logdebug(
@@ -303,52 +385,111 @@ class SimplePolarGoalTracker(object):
 
         return r, theta
 
-    def timer_cb(self, _event):
-        if not self.use_odom_fallback:
-            return
-        now = rospy.Time.now()
-        with self.state_lock:
-            if not self.have_odom:
-                rospy.logwarn_throttle(
-                    2.0,
-                    "Odometry fallback enabled, but no message received on %s.",
-                    self.odom_topic,
-                )
-                return
-            if not self.have_tag_estimate:
-                return
-            if self.last_detection_receive_time == rospy.Time(0):
-                return
-
-            odom_age = (now - self.last_odom_receive_time).to_sec()
-            if odom_age < 0.0 or odom_age > self.odom_timeout_sec:
-                rospy.logwarn_throttle(
-                    1.0,
-                    "Odometry is stale (%.2f s); suppressing tag prediction.",
-                    odom_age,
-                )
-                return
-
+    def prediction_stamp_from_camera(self, now, lost_age=None):
+        """Advance the newest detection-array stamp on its own clock axis."""
+        if (
+            self.last_detection_array_stamp != rospy.Time(0)
+            and self.last_detection_array_receive_time != rospy.Time(0)
+        ):
+            elapsed = (now - self.last_detection_array_receive_time).to_sec()
+            return self.last_detection_array_stamp + rospy.Duration.from_sec(
+                max(0.0, elapsed)
+            )
+        if lost_age is None:
             lost_age = (now - self.last_detection_receive_time).to_sec()
-            if lost_age <= self.lost_timeout_sec:
-                return
-            if lost_age > self.predict_timeout_sec:
-                rospy.logwarn_throttle(
-                    2.0,
-                    "Tag lost for %.2f s; stop odometry fallback publishing.",
-                    lost_age,
-                )
-                return
-
-            r, theta = self.estimate_polar_from_odom()
-            tag_id = self.last_tag_id
-
-        self.publish_polar(r, theta, tag_id, now)
-        rospy.loginfo_throttle(
-            1.0,
-            "AprilTag occluded for %.2f s; publishing odometry prediction.",
-            lost_age,
+        return self.last_detection_time + rospy.Duration.from_sec(
+            max(0.0, lost_age)
         )
+
+    def timer_cb(self, _event):
+        now = rospy.Time.now()
+        tracking_state = TRACKING_NOT_READY
+        prediction = None
+
+        with self.state_lock:
+            if self.last_detection_receive_time != rospy.Time(0):
+                lost_age = (now - self.last_detection_receive_time).to_sec()
+                if 0.0 <= lost_age <= self.lost_timeout_sec:
+                    tracking_state = TRACKING_VISIBLE
+                elif self.use_odom_fallback and lost_age > self.lost_timeout_sec:
+                    odom_age = (now - self.last_odom_receive_time).to_sec()
+                    array_age = (
+                        now - self.last_detection_array_receive_time
+                    ).to_sec()
+                    odom_is_fresh = (
+                        self.have_odom
+                        and 0.0 <= odom_age <= self.odom_timeout_sec
+                    )
+                    array_stream_is_fresh = (
+                        self.last_detection_array_receive_time != rospy.Time(0)
+                        and 0.0
+                        <= array_age
+                        <= self.detection_stream_timeout_sec
+                    )
+
+                    if not self.have_odom:
+                        rospy.logwarn_throttle(
+                            2.0,
+                            "Odometry fallback enabled, but no message received on %s.",
+                            self.odom_topic,
+                        )
+                    elif not odom_is_fresh:
+                        rospy.logwarn_throttle(
+                            1.0,
+                            "Odometry is stale (%.2f s); "
+                            "suppressing tag prediction/search.",
+                            odom_age,
+                        )
+                    elif not array_stream_is_fresh:
+                        rospy.logwarn_throttle(
+                            1.0,
+                            "AprilTag detection stream is stale (%.2f s); "
+                            "suppressing tag prediction/search.",
+                            array_age,
+                        )
+                    elif self.have_tag_estimate:
+                        if lost_age <= self.predict_timeout_sec:
+                            r, theta = self.estimate_polar_from_odom()
+                            prediction = (
+                                r,
+                                theta,
+                                self.last_tag_id,
+                                self.prediction_stamp_from_camera(now, lost_age),
+                                lost_age,
+                            )
+                            tracking_state = TRACKING_PREDICTING
+                        elif (
+                            self.search_enabled
+                            and lost_age
+                            <= self.predict_timeout_sec + self.search_timeout_sec
+                        ):
+                            # A downstream single-owner controller may turn in
+                            # place while this state is fresh. This tracker never
+                            # publishes robot actions itself.
+                            tracking_state = TRACKING_SEARCHABLE
+                        else:
+                            rospy.logwarn_throttle(
+                                2.0,
+                                "Tag lost for %.2f s; "
+                                "prediction/search window ended.",
+                                lost_age,
+                            )
+
+        self.publish_tracking_state(tracking_state)
+        if prediction is not None:
+            r, theta, tag_id, prediction_stamp, lost_age = prediction
+            self.publish_polar(r, theta, tag_id, prediction_stamp)
+            rospy.loginfo_throttle(
+                1.0,
+                "AprilTag occluded for %.2f s; publishing odometry prediction.",
+                lost_age,
+            )
+
+    def publish_tracking_state(self, state):
+        out = UInt8()
+        out.data = int(state)
+        self.tracking_state_pub.publish(out)
+        self.last_tracking_state = int(state)
 
     def publish_polar(self, r, theta, tag_id, stamp):
         out = PointStamped()

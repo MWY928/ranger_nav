@@ -51,12 +51,18 @@ class FakeInt32:
         self.data = 0
 
 
+class FakeUInt8:
+    def __init__(self, data=0):
+        self.data = int(data)
+
+
 def load_bridge_module():
     rospy = types.ModuleType("rospy")
     rospy.Time = FakeTime
     rospy.loginfo = lambda *args: None
     rospy.loginfo_throttle = lambda *args: None
     rospy.logwarn_throttle = lambda *args: None
+    rospy.logwarn = lambda *args: None
     rospy.logerr_throttle = lambda *args: None
     rospy.signal_shutdown = lambda *args: None
 
@@ -84,6 +90,7 @@ def load_bridge_module():
     std_msgs_msg = types.ModuleType("std_msgs.msg")
     std_msgs_msg.Header = type("Header", (), {})
     std_msgs_msg.Int32 = FakeInt32
+    std_msgs_msg.UInt8 = FakeUInt8
     std_msgs.msg = std_msgs_msg
 
     habitat_baselines = types.ModuleType("habitat_baselines")
@@ -165,6 +172,17 @@ def make_bridge_node(events=None):
     node.action_filter = make_filter()
     node.safety_stop_generation = 0
     node.pending_prev_stop = False
+    node.tag_search_enabled = False
+    node.tracking_state_timeout_sec = 0.5
+    node.tag_search_timeout_sec = 12.0
+    node.tag_search_default_action = BRIDGE_MODULE.SEARCH_LEFT_ACTION_ID
+    node.tracking_state = 0
+    node.tracking_state_receive_time = None
+    node.have_seen_visible_tracking_state = False
+    node.search_active = False
+    node.search_started_at = None
+    node.search_action_id = BRIDGE_MODULE.SEARCH_LEFT_ACTION_ID
+    node.search_rearm_required = False
     node.prev_actions = FillValue(3)
     node.last_obs_time = FakeTime(1.0)
     node.stopped_for_data_timeout = False
@@ -175,6 +193,7 @@ def make_bridge_node(events=None):
     node.debug_timing = False
     node.replay_dump_enabled = False
     node.action_topic = "/falcon/action_id"
+    node.latest_polar_msg = None
     node.depth_key = "depth"
     node.goal_key = "goal"
     node._build_obs = lambda **kwargs: (
@@ -279,6 +298,111 @@ def test_process_publishes_and_commits_state_before_replay_dump():
         ("dump", 3, 3, 3, 2.0),
     ]
     assert not node.stopped_for_data_timeout
+
+
+def test_search_is_opt_in_and_holds_stop_when_disabled():
+    node = make_bridge_node()
+    depth_msg, _ = make_messages()
+
+    with mock.patch.object(BRIDGE_MODULE.time, "monotonic", return_value=1.0):
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_SEARCHABLE))
+        node._process_one(depth_msg)
+
+    assert node.action_pub.values == [0]
+    assert not node.search_active
+    assert node.prev_actions.value == 3
+
+
+def test_search_entry_stops_then_turns_without_entering_policy_history():
+    node = make_bridge_node()
+    node.tag_search_enabled = True
+    depth_msg, polar_msg = make_messages()
+    polar_msg.point.y = -0.2
+    node.latest_polar_msg = polar_msg
+
+    with mock.patch.object(
+        BRIDGE_MODULE.time, "monotonic", side_effect=[0.9, 1.0, 1.1]
+    ):
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_VISIBLE))
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_SEARCHABLE))
+        node._process_one(depth_msg)
+
+    assert node.action_pub.values == [0, BRIDGE_MODULE.SEARCH_RIGHT_ACTION_ID]
+    assert node.search_active
+    assert node.prev_actions.value == 3
+    assert node.pending_prev_stop
+    assert node.action_filter.stable_action == 0
+
+
+def test_search_exit_stops_then_next_depth_resumes_policy_from_reset_state():
+    node = make_bridge_node()
+    node.tag_search_enabled = True
+    depth_msg, polar_msg = make_messages()
+    node.latest_polar_msg = polar_msg
+    node.action_filter_enabled = False
+    node._infer_action = lambda _obs: (1, None, {})
+    node._maybe_dump_replay_sample = lambda **kwargs: False
+
+    with mock.patch.object(
+        BRIDGE_MODULE.time,
+        "monotonic",
+        side_effect=[0.9, 1.0, 1.1, 1.2, 1.3],
+    ):
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_VISIBLE))
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_SEARCHABLE))
+        node._process_one(depth_msg)
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_VISIBLE))
+        node._process_one(depth_msg, polar_msg)
+
+    assert node.action_pub.values == [
+        0,
+        BRIDGE_MODULE.SEARCH_LEFT_ACTION_ID,
+        0,
+        1,
+    ]
+    assert not node.search_active
+    assert not node.pending_prev_stop
+    assert node.prev_actions.value == 1
+
+
+def test_expired_search_cannot_restart_on_same_state_heartbeat():
+    node = make_bridge_node()
+    node.tag_search_enabled = True
+    depth_msg, _ = make_messages()
+
+    with mock.patch.object(
+        BRIDGE_MODULE.time,
+        "monotonic",
+        side_effect=[0.0, 0.1, 0.2, 12.2, 12.3, 12.4],
+    ):
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_VISIBLE))
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_SEARCHABLE))
+        node._process_one(depth_msg)
+        node._process_one(depth_msg)
+        node._tracking_state_cb(FakeUInt8(BRIDGE_MODULE.TRACKING_STATE_SEARCHABLE))
+        node._process_one(depth_msg)
+
+    assert node.action_pub.values == [
+        0,
+        BRIDGE_MODULE.SEARCH_LEFT_ACTION_ID,
+        0,
+    ]
+    assert not node.search_active
+    assert node.search_rearm_required
+
+
+def test_enabled_search_mode_rejects_stale_tracking_state():
+    node = make_bridge_node()
+    node.tag_search_enabled = True
+    node.tracking_state = BRIDGE_MODULE.TRACKING_STATE_VISIBLE
+    node.tracking_state_receive_time = 1.0
+    depth_msg, polar_msg = make_messages()
+    node._infer_action = lambda _obs: pytest.fail("stale state reached policy")
+
+    with mock.patch.object(BRIDGE_MODULE.time, "monotonic", return_value=1.6):
+        node._process_one(depth_msg, polar_msg)
+
+    assert node.action_pub.values == [0]
 
 
 def test_replay_dump_distinguishes_raw_and_executed_actions(tmp_path):

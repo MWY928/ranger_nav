@@ -1,13 +1,9 @@
 <launch>
-  <!-- Self-contained Go2 detection stack:
-       remote D435 image -> local apriltag_ros -> go_nav polar_goal_tracker. -->
-  <arg name="image_topic" default="/camera/color/image_raw" />
-  <arg name="camera_info_topic" default="/camera/color/camera_info" />
+  <!-- Reuse an existing apriltag_ros detector and add odometry fallback. -->
   <arg name="detections_topic" default="/tag_detections" />
   <arg name="polar_topic" default="/tag_polar" />
   <arg name="tracking_state_topic" default="/tag_tracking_state" />
   <arg name="output_frame_id" default="base_link" />
-  <arg name="tags_config" default="$(find go_nav)/config/tags.yaml" />
 
   <arg name="target_tag_id" default="0" />
   <arg name="use_first_detection" default="false" />
@@ -22,7 +18,7 @@
 
   <arg name="use_odom_fallback" default="true" />
   <arg name="odom_topic" default="/go2/sport_odom" />
-  <arg name="lost_timeout_sec" default="0.12" />
+  <arg name="lost_timeout_sec" default="0.15" />
   <arg name="predict_timeout_sec" default="6.0" />
   <arg name="publish_rate_hz" default="15.0" />
   <arg name="reacquire_reset_sec" default="1.0" />
@@ -33,17 +29,6 @@
   <arg name="odom_timeout_sec" default="0.25" />
   <arg name="max_odom_jump_m" default="0.75" />
   <arg name="max_odom_yaw_jump_rad" default="1.20" />
-
-  <node pkg="apriltag_ros"
-        type="apriltag_ros_continuous_node"
-        name="apriltag_detector"
-        output="screen"
-        clear_params="true">
-    <rosparam command="load" file="$(arg tags_config)" />
-    <remap from="image_rect" to="$(arg image_topic)" />
-    <remap from="camera_info" to="$(arg camera_info_topic)" />
-    <remap from="tag_detections" to="$(arg detections_topic)" />
-  </node>
 
   <node pkg="go_nav"
         type="polar_goal_tracker.py"

@@ -6,6 +6,7 @@
   <arg name="sdk_timeout_sec" default="10.0" />
   <arg name="forward_speed" default="0.6" />
   <arg name="turn_speed" default="0.6" />
+  <arg name="search_turn_speed" default="0.25" />
   <arg name="action_timeout_sec" default="0.3" />
   <arg name="watchdog_rate_hz" default="20.0" />
   <arg name="smoothing_enabled" default="true" />
@@ -26,6 +27,7 @@
               --sdk_timeout_sec $(arg sdk_timeout_sec)
               --forward_speed $(arg forward_speed)
               --turn_speed $(arg turn_speed)
+              --search_turn_speed $(arg search_turn_speed)
               --action_timeout_sec $(arg action_timeout_sec)
               --watchdog_rate_hz $(arg watchdog_rate_hz)
               --smoothing_enabled $(arg smoothing_enabled)

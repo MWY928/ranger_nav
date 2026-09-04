@@ -31,8 +31,10 @@
 | `1` | 前进 | `Move(forward_speed, 0, 0)` |
 | `2` | 左转 | `Move(0, 0, +turn_speed)` |
 | `3` | 右转 | `Move(0, 0, -turn_speed)` |
+| `4` | 遮挡搜索左转 | `Move(0, 0, +search_turn_speed)` |
+| `5` | 遮挡搜索右转 | `Move(0, 0, -search_turn_speed)` |
 
-策略输出先经过确定性选择、动作概率 EMA 和切换迟滞，再由动作映射节点转换为速度。映射节点以固定频率执行限加/减速，默认目标速度为 `forward_speed=0.6`、`turn_speed=0.6`。
+Falcon 模型和动作滤波的输出空间仍严格保持 `0--3` 四个动作；`4/5` 仅由 bridge 在确认目标遮挡且允许搜索时产生，不会写入模型的 `prev_action`。映射节点以固定频率执行限加/减速，默认目标速度为 `forward_speed=0.6`、`turn_speed=0.6`、`search_turn_speed=0.25 rad/s`。
 
 ## 2. 系统架构
 
@@ -95,7 +97,7 @@ ROS1 节点会使用随机 TCP 端口建立连接，因此不能只开放 `11311
 
 ```bash
 source /opt/ros/noetic/setup.bash
-cd /home/mobile/ranger_ws
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2/ranger_ws
 rosdep install --from-paths src --ignore-src -r -y
 catkin_make --pkg go_nav
 source devel/setup.bash
@@ -108,11 +110,11 @@ source devel/setup.bash
 仓库中的快捷脚本按照现有部署机编写，默认使用：
 
 ```text
-/home/mobile/ranger_nav                # 仓库
-/home/mobile/ranger_ws                 # catkin workspace
-/home/mobile/catkin_ws                 # 其他 ROS 包（若存在）
-/home/mobile/miniconda3                # Conda
-conda env: falcon / simple_nav / unitree
+/home/mobile/wys/go2_falcon_main/ranger_nav_go2            # 工作站仓库
+/home/mobile/wys/go2_falcon_main/ranger_nav_go2/ranger_ws  # 工作站 catkin workspace
+/home/unitree/go2_detection_ws                             # Jetson catkin workspace
+/home/mobile/miniconda3                                    # Conda
+/home/mobile/zzy/unitree_sdk2py_env                        # Unitree SDK2 venv
 ```
 
 如果用户名、仓库位置、workspace 或 Conda 安装位置不同，请修改以下脚本中的 `source` 和路径：
@@ -150,11 +152,11 @@ goal_obs_key=pointgoal_with_gps_compass
 
 ## 4. 配置 ROS1 多机通信
 
-以下示例让算法机充当 ROS master。示例地址为：
+当前部署让 Go2 Jetson 充当 ROS master：
 
 ```text
-算法机：192.168.123.10
-Go2 Jetson：192.168.123.20
+算法机：192.168.123.100
+Go2 Jetson / ROS master：192.168.123.18
 ```
 
 请替换为实际网卡地址，不要把 `127.0.0.1`、Docker 地址或无法被另一台机器访问的地址设置为 `ROS_IP`。
@@ -164,26 +166,24 @@ Go2 Jetson：192.168.123.20
 在算法机的每个 ROS 终端中设置：
 
 ```bash
-export ROS_MASTER_URI=http://192.168.123.10:11311
-export ROS_IP=192.168.123.10
+export ROS_MASTER_URI=http://192.168.123.18:11311
+export ROS_IP=192.168.123.100
 ```
 
-然后启动 ROS master：
-
-```bash
-roscore
-```
+工作站上的 `~/go2_test_scripts/source_ros_pc_to_go2.sh` 应保存上述两个普通 shell 赋值；URL 不要写成 Markdown 的 `[http://...](http://...)` 形式。
 
 ### 4.2 Go2 Jetson
 
 在 Jetson 的相机终端中设置：
 
 ```bash
-export ROS_MASTER_URI=http://192.168.123.10:11311
-export ROS_IP=192.168.123.20
+export ROS_MASTER_URI=http://192.168.123.18:11311
+export ROS_IP=192.168.123.18
 ```
 
-确认两台机器能够互相 `ping`，并使用 NTP/chrony 同步时间。Falcon bridge 默认只接受与深度帧时间差不超过 `0.12 s` 的极坐标消息，明显的时钟偏差或网络拥塞会导致策略持续输出停止。
+如果 Jetson 上尚无 ROS master，先在 Jetson 启动 `roscore`。
+
+确认两台机器能够互相 `ping`，并使用 NTP/chrony 同步时间。`run_bridge.sh` 默认只接受与深度帧时间差不超过 `0.50 s` 的极坐标消息，明显的时钟偏差或网络拥塞会导致策略持续输出停止。
 
 ## 5. 实机启动顺序
 
@@ -220,7 +220,7 @@ rostopic hz /camera/aligned_depth_to_color/image_raw
 默认使用简单版本：
 
 ```bash
-cd /home/mobile/ranger_nav
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2
 bash start_detection.sh
 ```
 
@@ -271,18 +271,99 @@ bash start_detection.sh
 
 ```bash
 USE_ODOM_FALLBACK=true \
-ODOM_TOPIC=/odom \
+ODOM_TOPIC=/go2/sport_odom \
 bash start_detection_full.sh
 ```
 
-完整版本在标签短暂丢失后，使用 odom 中保存的标签位置继续发布 `/tag_polar`。默认在丢失 `0.30 s` 后开始外推，最多持续 `5.0 s`，发布频率 `20 Hz`。如果 Go2 的 odom 坐标、朝向符号或时间戳尚未验证，应保持默认的 `USE_ODOM_FALLBACK=false`。
+完整版本在标签短暂丢失后，使用 odom 中保存的标签位置继续发布 `/tag_polar`。默认在丢失 `0.12 s` 后开始外推，最多持续到丢失满 `6.0 s`，发布频率 `15 Hz`，与当前相机/深度频率一致。如果 Go2 的 odom 坐标或朝向符号尚未验证，应先使用简单版本，并单独验证 `/go2/sport_odom`。
+
+预测时 tracker 会继续读取 `apriltag_ros` 以约 `15 Hz` 发布的空 detection array，并使用每帧数组的相机时间戳；因此预测 `/tag_polar` 与后续深度帧保持同一时间轴。检测数组、odom 任一停止更新时，tracker 会发布 NOT_READY 并停止预测/搜索，不会用旧数据盲目运动。
+
+预测窗口结束后可以进入额外的低速原地搜索阶段。该功能默认关闭，需要 tracker 与 Falcon bridge 两端同时显式启用。状态流为 `VISIBLE(1) -> PREDICTING(2) -> SEARCHABLE(3) -> NOT_READY(0)`：先用 6 秒补偿完成绕障，然后以最后目标方位选择搜索方向；重见 Tag 立即 STOP 并退出搜索，状态/深度/odom 过期或搜索超过 12 秒也立即停车。
+
+#### 推荐部署：在 Jetson 上运行 full detection
+
+当 D435 与 AprilTag 检测已经位于 Jetson 时，建议把整个 `go_nav` 包同步到 Jetson，而不是只复制单个 Python 文件。Jetson 本地处理 `image_raw + camera_info`，工作站只向 Jetson 发送轻量的 `/go2/sport_odom`，Jetson 再向工作站发布 `/tag_polar`。Unitree SDK2 和对应 venv 仍留在工作站，Jetson 不需要安装。
+
+从工作站同步包到 Jetson 的现有 Noetic workspace：
+
+```bash
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2
+rsync -av \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  ranger_ws/src/go_nav/ \
+  unitree@192.168.123.18:/home/unitree/go2_detection_ws/src/go_nav/
+```
+
+`config/tags.yaml` 中的 Tag family、ID 和物理尺寸必须与实物一致。如果 Jetson 上已有经过标定的配置，同步前先保留并比较该文件。
+
+在 Jetson（ROS Noetic）上构建：
+
+```bash
+source /opt/ros/noetic/setup.bash
+cd /home/unitree/go2_detection_ws
+rosdep install --from-paths src/go_nav --ignore-src -r -y
+chmod +x src/go_nav/scripts/polar_goal_tracker.py
+catkin_make --pkg go_nav -DPYTHON_EXECUTABLE=/usr/bin/python3
+source devel/setup.bash
+```
+
+工作站继续运行 SportModeState bridge：
+
+```bash
+source /home/mobile/zzy/unitree_sdk2py_env/bin/activate
+source ~/go2_test_scripts/source_ros_pc_to_go2.sh
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2
+bash go2/start_sport_state_odom.sh
+```
+
+Jetson 必须先能收到工作站发布的 odom：
+
+```bash
+rostopic hz /go2/sport_odom
+```
+
+如果 Jetson 上已有独立运行且频率稳定的 `apriltag_ros`，保留该检测器，仅停止旧的 `polar_distance.py`（节点通常名为 `/tag_to_polar_node`），避免两个 `/tag_polar` 发布者。然后启动只包含 odom tracker 的 launch：
+
+```bash
+source /opt/ros/noetic/setup.bash
+export ROS_MASTER_URI=http://192.168.123.18:11311
+export ROS_IP=192.168.123.18
+source /home/unitree/go2_detection_ws/devel/setup.bash
+
+roslaunch go_nav go2_polar_tracker.launch \
+  detections_topic:=/tag_detections \
+  odom_topic:=/go2/sport_odom \
+  polar_topic:=/tag_polar \
+  tracking_state_topic:=/tag_tracking_state \
+  lost_timeout_sec:=0.15 \
+  predict_timeout_sec:=6.0 \
+  publish_rate_hz:=15 \
+  search_enabled:=true \
+  search_timeout_sec:=12.0
+```
+
+如果原来的 `go2_detection_simple.launch` 把 AprilTag 和旧 polar 节点绑在同一个 roslaunch 中，则停止整个 simple launch，再改用包含 AprilTag 的 `go2_detection_full.launch`。
+
+两台机器必须使用同一个 `ROS_MASTER_URI`，各自的 `ROS_IP` 必须是对方可访问的地址，并通过 NTP/chrony 同步时钟。工作站上不要再运行 `start_detection.sh` 或 `start_detection_full.sh`；Falcon bridge 直接订阅 Jetson 发布的 `/tag_polar`。
 
 ### 5.3 启动 Falcon 推理
 
-使用默认 checkpoint：
+使用默认 checkpoint，但保持搜索关闭：
 
 ```bash
-cd /home/mobile/ranger_nav
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2
+bash run_bridge.sh
+```
+
+若 Jetson tracker 已使用 `search_enabled:=true`，在工作站同时启用 Falcon 搜索仲裁：
+
+```bash
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2
+TAG_SEARCH_ENABLED=true \
+TRACKING_STATE_TOPIC=/tag_tracking_state \
+TAG_SEARCH_TIMEOUT_SEC=12.0 \
 bash run_bridge.sh
 ```
 
@@ -293,7 +374,12 @@ bash start_falcon_bridge.launch \
   --checkpoint /absolute/path/to/model.pth \
   --depth_topic /camera/aligned_depth_to_color/image_raw \
   --polar_topic /tag_polar \
+  --tracking_state_topic /tag_tracking_state \
   --action_topic /falcon/action_id \
+  --tag_search_enabled true \
+  --tracking_state_timeout_sec 0.5 \
+  --tag_search_timeout_sec 12.0 \
+  --tag_search_default_direction left \
   --deterministic \
   --action_filter_tau_sec 0.15 \
   --action_switch_margin 0.10 \
@@ -306,18 +392,19 @@ bash start_falcon_bridge.launch \
 ```bash
 rostopic echo /falcon/action_id
 rostopic hz /falcon/obs_heartbeat
+rostopic echo /tag_tracking_state
 ```
 
 Falcon bridge 由深度帧驱动推理。`run_bridge.sh` 默认使用确定性 argmax，并对四个动作的概率执行时间型 EMA；新动作持续满足概率优势和确认时间后才会发布。滤波后的实际动作会作为 RNN 下一帧的 `prev_action`。
 
-没有有效 `/tag_polar`、输入时间戳不匹配、回调异常或输入 watchdog 超时时，安全 Action `0` 会绕过 EMA 和确认时间立即发布。`run_bridge.sh` 的 watchdog 默认值为 `0.90 s`；直接运行 Python bridge 时默认值为 `0.3 s`。
+没有有效 `/tag_polar`、输入时间戳不匹配、回调异常或输入 watchdog 超时时，安全 Action `0` 会绕过 EMA 和确认时间立即发布。启用搜索后，只有新鲜的状态 `3` 才能输出 `4/5`；进入/退出搜索会先输出 `0` 并重置策略历史，重获 Tag 后下一帧再恢复 Falcon 推理。`run_bridge.sh` 的 watchdog 默认值为 `0.90 s`；直接运行 Python bridge 时默认值为 `0.3 s`。
 
 ### 5.4 先以 dry-run 验证 Unitree 映射
 
 运行动作映射节点前，先确认 Unitree Python 环境能够导入 SDK：
 
 ```bash
-source /path/to/unitree_venv/bin/activate
+source /home/mobile/zzy/unitree_sdk2py_env/bin/activate
 source /opt/ros/noetic/setup.bash
 unset UNITREE_CONDA_ENV
 python3 -c "import sys, rospy, nav_msgs.msg, unitree_sdk2py; print('Unitree venv OK:', sys.executable)"
@@ -330,7 +417,7 @@ SDK2 可以安装在系统 Python、普通 venv 或 Conda 环境中。启动脚�
 然后启用 dry-run。此模式只打印 SDK 命令，不控制机器人：
 
 ```bash
-cd /home/mobile/ranger_nav
+cd /home/mobile/wys/go2_falcon_main/ranger_nav_go2
 
 UNITREE_DRY_RUN=true \
 UNITREE_NETWORK_INTERFACE=enxec9a0c1bc5be \
@@ -343,10 +430,12 @@ bash go2/start_action_mapper.sh
 rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 1"
 rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 2"
 rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 3"
+rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 4"
+rostopic pub -r 20 /falcon/action_id std_msgs/Int32 "data: 5"
 rostopic pub -1 /falcon/action_id std_msgs/Int32 "data: 0"
 ```
 
-前三条命令每次只运行一条，观察完成后按 `Ctrl-C`；持续发布可以覆盖 `0.3 s` 的动作 watchdog，并完整观察速度爬升过程。
+前五条命令每次只运行一条，观察完成后按 `Ctrl-C`；持续发布可以覆盖 `0.3 s` 的动作 watchdog，并完整观察速度爬升过程。尤其先确认 `4` 确实向左、`5` 确实向右，再允许自动搜索。
 
 ### 5.5 启用 Go2 实际运动
 
@@ -357,6 +446,7 @@ UNITREE_NETWORK_INTERFACE=enxec9a0c1bc5be \
 UNITREE_DOMAIN_ID=0 \
 FORWARD_SPEED=0.3 \
 TURN_SPEED=0.4 \
+SEARCH_TURN_SPEED=0.20 \
 ACTION_TIMEOUT_SEC=0.3 \
 UNITREE_DRY_RUN=false \
 bash go2/start_action_mapper.sh
@@ -371,7 +461,7 @@ bash go2/start_action_mapper.sh
 - 超过 `ACTION_TIMEOUT_SEC` 未收到新动作。
 - 节点正常退出。
 
-Action `0`、未知动作、watchdog 和退出始终立即停车，不经过速度斜坡。正常的前进/左转/右转及其相互切换会在 `WATCHDOG_RATE_HZ` 控制循环中按线速度和角速度加减速限制渐变。
+Action `0`、未知动作、watchdog 和退出始终立即停车，不经过速度斜坡。正常的前进/左转/右转以及低速原地搜索会在 `WATCHDOG_RATE_HZ` 控制循环中按线速度和角速度加减速限制渐变；bridge 在进入搜索前先发 `0`，避免从前进直接切换成带线速度的弧线。
 
 默认不会在启动时自动执行 `BalanceStand()`。如确有需要，可设置：
 
@@ -388,9 +478,12 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `/camera/aligned_depth_to_color/image_raw` | `sensor_msgs/Image` | Jetson `realsense2_ros` | Falcon bridge |
 | `/tag_detections` | `apriltag_ros/AprilTagDetectionArray` | `apriltag_ros` | polar node |
 | `/tag_polar` | `geometry_msgs/PointStamped` | polar node | Falcon bridge |
-| `/odom` | `nav_msgs/Odometry` | Go2/定位节点 | full tracker，可选 |
+| `/tag_tracking_state` | `std_msgs/UInt8` | polar tracker | Falcon bridge |
+| `/go2/sport_odom` | `nav_msgs/Odometry` | SportModeState bridge | full tracker |
 | `/falcon/action_id` | `std_msgs/Int32` | Falcon bridge | Unitree action mapper |
 | `/falcon/obs_heartbeat` | `std_msgs/Header` | Falcon bridge | 调试/监控 |
+
+`/tag_tracking_state` 的值为：`0=NOT_READY`、`1=VISIBLE`、`2=PREDICTING`、`3=SEARCHABLE`。搜索模式下仍应确认 `/falcon/action_id` 只有 Falcon bridge 一个发布者。
 
 本分支的实机主链路不再使用 `/cmd_vel`。如果其他节点仍在等待 `/cmd_vel`，不会收到 Falcon 的控制输出。
 
@@ -404,14 +497,21 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `GO2_CAMERA_INFO_TOPIC` | `/camera/color/camera_info` | 彩色相机内参 |
 | `TAG_DETECTIONS_TOPIC` | `/tag_detections` | AprilTag 检测输出 |
 | `POLAR_TOPIC` | `/tag_polar` | Falcon 极坐标目标 |
+| `TRACKING_STATE_TOPIC` | `/tag_tracking_state` | tracker 到 Falcon 的安全状态心跳 |
 | `TARGET_TAG_ID` | `0` | 目标标签 ID |
 | `USE_FIRST_DETECTION` | `false` | 忽略 ID，使用第一个检测 |
 | `THETA_OFFSET_RAD` | `0.0` | 相机安装角修正 |
 | `THETA_DEADBAND_RAD` | `0.0` | 角度死区 |
 | `DISTANCE_OFFSET` | `0.6` | 从测量距离中减去的偏移 |
 | `MIN_DISTANCE` | `0.0` | 输出距离下限 |
-| `USE_ODOM_FALLBACK` | `false` | 启用标签丢失后的 odom 外推 |
-| `ODOM_TOPIC` | `/odom` | 里程计 topic |
+| `USE_ODOM_FALLBACK` | full 脚本为 `true` | 启用标签丢失后的 odom 外推 |
+| `ODOM_TOPIC` | `/go2/sport_odom` | Go2 里程计 topic |
+| `PREDICT_TIMEOUT_SEC` | `6.0` | 从最后一次可见开始计算的最大预测时长 |
+| `PREDICT_RATE_HZ` | `15.0` | 预测与状态心跳频率 |
+| `REACQUIRE_RESET_SEC` | `1.0` | 遮挡超过该时间后，重捕获时重置目标估计而非继续 EMA |
+| `DETECTION_STREAM_TIMEOUT_SEC` | `0.5` | 空 detection array 也停止更新时禁止预测/搜索 |
+| `TAG_SEARCH_ENABLED` | `false` | tracker/bridge 均需开启，才允许低速搜索 |
+| `TAG_SEARCH_TIMEOUT_SEC` | `12.0` | 6 秒预测结束后的额外搜索时限 |
 
 ### Unitree 动作映射
 
@@ -425,6 +525,7 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `UNITREE_TIMEOUT_SEC` | `10.0` | SportClient 调用超时 |
 | `FORWARD_SPEED` | `0.6` | 前进速度 |
 | `TURN_SPEED` | `0.6` | 转向角速度 |
+| `SEARCH_TURN_SPEED` | `0.25` | Action `4/5` 的原地搜索角速度 |
 | `ACTION_TIMEOUT_SEC` | `0.3` | 动作流 watchdog |
 | `WATCHDOG_RATE_HZ` | `20.0` | watchdog 与速度斜坡控制频率 |
 | `VELOCITY_SMOOTHING_ENABLED` | `true` | 启用目标速度限加/减速 |
@@ -443,6 +544,8 @@ UNITREE_BALANCE_STAND_ON_START=true bash go2/start_action_mapper.sh
 | `ACTION_SWITCH_MARGIN` | `0.10` | 新动作相对当前动作所需的概率优势 |
 | `ACTION_SWITCH_HOLD_SEC` | `0.12` | 普通动作切换确认时间 |
 | `STOP_SWITCH_HOLD_SEC` | `0.20` | 策略 STOP 的确认时间；安全 STOP 不受此参数影响 |
+| `TRACKING_STATE_TIMEOUT_SEC` | `0.50` | 搜索状态心跳最大允许间隔 |
+| `TAG_SEARCH_DEFAULT_DIRECTION` | `left` | 最后目标角度恰为零/无效时的备用搜索方向 |
 
 ## 8. 故障排查
 
@@ -470,7 +573,10 @@ rostopic list
 ### `/tag_polar` 正常，但没有 Falcon 动作
 
 - 确认对齐深度 topic 名称为 `/camera/aligned_depth_to_color/image_raw`。
-- 检查深度图与 `/tag_polar` 的时间戳；默认最大允许差值为 `0.12 s`。
+- 检查深度图与 `/tag_polar` 的时间戳；`run_bridge.sh` 默认最大允许差值为 `0.50 s`。
+- 如果旧日志在丢失约 `1.05 s` 后才开始 mismatch，原因通常是旧版 `predict_timeout_sec=1.0` 到期，而不是刚进入预测就错时钟；同步新版 tracker 后默认窗口为 `6.0 s`。
+- 新版预测 stamp 来自持续发布的 detection array 相机时间轴。若 `/tag_detections` 本身停止，tracker 会安全转为状态 `0`，不应增大 `MAX_POLAR_AGE_SEC` 掩盖问题。
+- 预测满 6 秒后：未启用搜索会按设计停车；已在 tracker 和 bridge 两端启用搜索则应看到 `/tag_tracking_state: 3`，随后 `/falcon/action_id: 4/5`。
 - 确认 checkpoint 文件存在，且网络结构与 bridge 参数一致。
 - 使用调试参数查看深度预处理和动作概率：
 
@@ -499,7 +605,7 @@ bash start_falcon_bridge.launch \
 
 ### 左右方向相反或目标中心有固定偏差
 
-当前约定为 `theta > 0` 左转、`theta < 0` 右转。先在 dry-run 中移动标签验证符号，再调整 `THETA_OFFSET_RAD`；不要直接交换 Action `2/3` 来掩盖相机坐标或安装方向问题。
+当前约定为 `theta > 0` 左转、`theta < 0` 右转，但旧的 `follow_tag.py` 使用过相反符号。先在 dry-run 中验证 Action `2/3/4/5` 的实际方向，再允许自动搜索并调整 `THETA_OFFSET_RAD`；不要直接交换动作 ID 来掩盖相机坐标或安装方向问题。
 
 ## 9. 仓库中的关键文件
 
@@ -508,6 +614,7 @@ ranger_ws/src/go_nav/
 ├── config/tags.yaml                    # AprilTag family、ID 和尺寸
 ├── launch/go2_detection_simple.launch  # AprilTag + 直接极坐标
 ├── launch/go2_detection_full.launch    # AprilTag + 可选 odom 外推
+├── launch/go2_polar_tracker.launch     # 复用已有 AprilTag + odom 外推
 ├── launch/go2_action_mapper.launch     # 离散动作到 Unitree SDK2
 └── scripts/
     ├── polar_distance.py

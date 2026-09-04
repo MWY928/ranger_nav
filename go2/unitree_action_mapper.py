@@ -14,6 +14,8 @@ ACTION_NAMES = {
     1: "forward",
     2: "left",
     3: "right",
+    4: "search_left",
+    5: "search_right",
 }
 
 
@@ -202,6 +204,8 @@ class UnitreeActionMapper(object):
             1: (args.forward_speed, 0.0, 0.0),
             2: (0.0, 0.0, args.turn_speed),
             3: (0.0, 0.0, -args.turn_speed),
+            4: (0.0, 0.0, args.search_turn_speed),
+            5: (0.0, 0.0, -args.search_turn_speed),
         }
         self.last_action_time = rospy.Time(0)
         self.last_action_id = None
@@ -238,10 +242,15 @@ class UnitreeActionMapper(object):
         rospy.loginfo("Unitree action mapper started.")
         rospy.loginfo("Subscribe action_topic: %s", args.action_topic)
         rospy.loginfo(
-            "Mapping: 0 stop, 1 Move(%.3f,0,0), 2 Move(0,0,%.3f), 3 Move(0,0,-%.3f)",
+            "Mapping: 0 stop, 1 Move(%.3f,0,0), "
+            "2 Move(0,0,%.3f), 3 Move(0,0,-%.3f), "
+            "4 search-left Move(0,0,%.3f), "
+            "5 search-right Move(0,0,-%.3f)",
             args.forward_speed,
             args.turn_speed,
             args.turn_speed,
+            args.search_turn_speed,
+            args.search_turn_speed,
         )
         rospy.loginfo("action_timeout_sec: %.3f", args.action_timeout_sec)
         rospy.loginfo(
@@ -418,6 +427,7 @@ def parse_args():
     parser.add_argument("--sdk_timeout_sec", type=float, default=10.0)
     parser.add_argument("--forward_speed", type=float, default=0.6)
     parser.add_argument("--turn_speed", type=float, default=0.6)
+    parser.add_argument("--search_turn_speed", type=float, default=0.25)
     parser.add_argument("--action_timeout_sec", type=float, default=0.3)
     parser.add_argument("--watchdog_rate_hz", type=float, default=20.0)
     parser.add_argument(

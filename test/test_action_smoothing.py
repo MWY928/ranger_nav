@@ -186,6 +186,8 @@ def make_mapper_node():
         1: (0.6, 0.0, 0.0),
         2: (0.0, 0.0, 0.6),
         3: (0.0, 0.0, -0.6),
+        4: (0.0, 0.0, 0.25),
+        5: (0.0, 0.0, -0.25),
     }
     node.last_action_time = FakeTime(0)
     node.last_action_id = None
@@ -267,6 +269,28 @@ def test_mapper_ramps_motion_but_action_zero_stops_immediately(monkeypatch):
     node.action_cb(types.SimpleNamespace(data=0))
     assert node.controller.stop_count == 1
     assert node.velocity_limiter.current == (0.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("action_id", "expected_vyaw"), ((4, 0.25), (5, -0.25))
+)
+def test_mapper_uses_separate_low_speed_search_actions(
+    monkeypatch, action_id, expected_vyaw
+):
+    configure_mapper_logging_stubs(monkeypatch)
+    node = make_mapper_node()
+
+    FakeTime.now_sec = 0.01
+    node.action_cb(types.SimpleNamespace(data=action_id))
+    assert node.velocity_limiter.target == (0.0, 0.0, expected_vyaw)
+
+    FakeTime.now_sec = 0.05
+    node.control_cb(None)
+    assert node.controller.moves[-1][0:2] == (0.0, 0.0)
+    assert math.copysign(1.0, node.controller.moves[-1][2]) == math.copysign(
+        1.0, expected_vyaw
+    )
+    assert abs(node.controller.moves[-1][2]) <= abs(expected_vyaw)
 
 
 def test_mapper_watchdog_stops_once_and_resets_limiter(monkeypatch):
