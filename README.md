@@ -121,6 +121,7 @@ source devel/setup.bash
 
 - `start_detection.sh`
 - `start_detection_full.sh`
+- `start_detection_full_jetson.sh`
 - `run_bridge.sh`
 - `start_falcon_bridge.launch`
 - `go2/start_action_mapper.sh`
@@ -322,6 +323,26 @@ Jetson 必须先能收到工作站发布的 odom：
 
 ```bash
 rostopic hz /go2/sport_odom
+```
+
+你目前的 `start_detection_jetson.sh` 最终运行 `go2_detection_simple.launch`，会同时启动 AprilTag 和旧的 `polar_distance.py`。因此不要在它旁边再启动 odom tracker；应停止旧 launch，直接用仓库根目录的 `start_detection_full_jetson.sh` 替换它。该脚本一次启动 Jetson 本地 AprilTag 与 odom tracker，并默认使用 6 秒预测、15 Hz 输出和 12 秒低速搜索状态。
+
+在工作站复制脚本到 Jetson（单行）：
+
+```bash
+scp start_detection_full_jetson.sh unitree@192.168.123.18:/home/unitree/go2_test_scripts/start_detection_full_jetson.sh
+```
+
+在 Jetson 停掉旧 detection launch 后启动（单行）：
+
+```bash
+bash ~/go2_test_scripts/start_detection_full_jetson.sh
+```
+
+脚本会在启动前检查图像、CameraInfo 和 `/go2/sport_odom` 的消息类型，并在检测到旧的 `/apriltag_detector`、`/tag_to_polar_node` 或 `/polar_goal_tracker_node` 时拒绝重复启动。需要修改窗口时仍可保持单行输入，例如：
+
+```bash
+PREDICT_TIMEOUT_SEC=8.0 TAG_SEARCH_TIMEOUT_SEC=15.0 bash ~/go2_test_scripts/start_detection_full_jetson.sh
 ```
 
 如果 Jetson 上已有独立运行且频率稳定的 `apriltag_ros`，保留该检测器，仅停止旧的 `polar_distance.py`（节点通常名为 `/tag_to_polar_node`），避免两个 `/tag_polar` 发布者。然后启动只包含 odom tracker 的 launch：
@@ -625,6 +646,7 @@ sensor/action_filter.py                  # 动作概率 EMA、迟滞与 STOP 确
 sensor/falcon_ros_bridge.py              # 深度 + 目标 → Falcon → 滤波后 Action ID
 start_detection.sh                       # 简单目标检测入口
 start_detection_full.sh                  # 完整目标跟踪入口
+start_detection_full_jetson.sh           # Jetson 本地 AprilTag + odom tracker 入口
 run_bridge.sh                            # 默认 Falcon 实机推理入口
 start_falcon_bridge.launch               # 可传参数的 Bash 推理入口
 go2/start_action_mapper.sh               # Unitree 动作映射入口
